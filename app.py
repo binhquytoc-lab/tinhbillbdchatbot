@@ -10,7 +10,7 @@ from google.genai import types
 # 1. CẤU HÌNH HỆ THỐNG
 # ============================================================
 GEMINI_API_KEY = "AQ.Ab8RN6I3y7AcTqcPDfujdsImDFe-4ODOqMIEwlP7vtgTRg0PiQ"
-GEMINI_MODEL = "gemini-2.0-flash"
+GEMINI_MODEL = "gemini-1.5-flash"
 APP_VERSION = "v4-genai-sdk"
 
 AIVEN_HOST = "mysql-3a5ef2bc-binhquytoc.a.aivencloud.com"
