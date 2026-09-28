@@ -7,9 +7,8 @@ from sqlalchemy.engine import URL
 
 # ============================================================
 # 1. CẤU HÌNH HỆ THỐNG
-# ============================================================
 GEMINI_API_KEY = "AQ.Ab8RN6IKSScqtViSQ1qO6m_fT1XlwlwrQveL0l8xuhVL3XnvgA"
-GEMINI_MODEL = "gemini-3.8-flash"
+GEMINI_MODEL = "gemini-2.0-flash"  # Sửa model hợp lệ
 APP_VERSION = "v3-diagnostic"
 
 AIVEN_HOST = "mysql-3a5ef2bc-binhquytoc.a.aivencloud.com"
@@ -278,58 +277,7 @@ def get_database_context():
 
 # ============================================================
 # 8. GỌI GEMINI API
-#    - Key "AQ...."  -> Vertex AI (Express Mode)
-#    - Key "AIza..." -> Google AI Studio
-#    Không dùng "Authorization: Bearer" (chỉ dành cho OAuth token)
 # ============================================================
-GEMINI_BASES = [
-    ("AI Studio", "https://generativelanguage.googleapis.com/v1beta"),
-    ("Vertex AI", "https://aiplatform.googleapis.com/v1/publishers/google"),
-]
-
-
-def post_with_key(url, token, payload):
-    """Gửi request bằng header x-goog-api-key, nếu lỗi xác thực thì thử query string."""
-    response = requests.post(
-        url,
-        headers={"Content-Type": "application/json", "x-goog-api-key": token},
-        json=payload,
-        timeout=60,
-    )
-    if response.status_code in (401, 403):
-        response = requests.post(
-            url,
-            params={"key": token},
-            headers={"Content-Type": "application/json"},
-            json=payload,
-            timeout=60,
-        )
-    return response
-
-
-def discover_flash_models(token):
-    """Hỏi Google xem key này dùng được những model nào (ưu tiên dòng flash)."""
-    try:
-        r = requests.get(
-            "https://generativelanguage.googleapis.com/v1beta/models",
-            headers={"x-goog-api-key": token},
-            params={"pageSize": 200},
-            timeout=30,
-        )
-        if r.status_code != 200:
-            return []
-        names = []
-        for m in r.json().get("models", []):
-            if "generateContent" in m.get("supportedGenerationMethods", []):
-                name = m["name"].replace("models/", "")
-                if "flash" in name and "image" not in name and "tts" not in name:
-                    names.append(name)
-        names.sort(reverse=True)
-        return names[:5]
-    except Exception:
-        return []
-
-
 def ask_gemini(user_question):
     token = GEMINI_API_KEY.strip() if GEMINI_API_KEY else ""
 
@@ -370,49 +318,26 @@ def ask_gemini(user_question):
         ],
     }
 
-    errors = []
+    # URL Endpoint chuẩn cho Gemini API với API Key
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={token}"
+    headers = {"Content-Type": "application/json"}
 
-    for label, base in GEMINI_BASES:
-        models_to_try = [GEMINI_MODEL]
-        discovered = False
-        i = 0
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=60)
+        res_json = response.json()
 
-        while i < len(models_to_try):
-            model = models_to_try[i]
-            i += 1
-            url = f"{base}/models/{model}:generateContent"
-
+        if response.status_code == 200:
             try:
-                response = post_with_key(url, token, payload)
-                try:
-                    res_json = response.json()
-                except Exception:
-                    res_json = {}
+                parts = res_json["candidates"][0]["content"]["parts"]
+                return "".join(p.get("text", "") for p in parts)
+            except (KeyError, IndexError):
+                return "⚠️ Không lấy được câu trả lời từ phản hồi của Gemini."
+        else:
+            err_msg = res_json.get("error", {}).get("message", response.text)
+            return f"❌ **Lỗi Gemini API ({response.status_code}):** `{err_msg}`"
 
-                if response.status_code == 200:
-                    try:
-                        parts = res_json["candidates"][0]["content"]["parts"]
-                        return "".join(p.get("text", "") for p in parts)
-                    except (KeyError, IndexError):
-                        return "⚠️ Không lấy được câu trả lời từ phản hồi của Gemini."
-
-                if isinstance(res_json, list) and res_json:
-                    res_json = res_json[0]
-                err_msg = res_json.get("error", {}).get("message", response.text)
-                errors.append(f"**{label} / {model} ({response.status_code}):** `{err_msg}`")
-
-                # Model không tồn tại: tự dò model khác mà key được dùng
-                if response.status_code == 404 and label == "AI Studio" and not discovered:
-                    discovered = True
-                    for name in discover_flash_models(token):
-                        if name not in models_to_try:
-                            models_to_try.append(name)
-
-            except Exception as e:
-                errors.append(f"**{label} / {model}:** lỗi kết nối `{e}`")
-
-    return "❌ **Không gọi được Gemini.** Chi tiết từng lần thử:\n\n" + "\n\n".join(errors)
-
+    except Exception as e:
+        return f"❌ **Lỗi kết nối:** `{e}`"
 
 # ============================================================
 # 9. SIDEBAR
