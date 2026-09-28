@@ -1,6 +1,5 @@
-streamlit
-pandas
-numpy
-sqlalchemy
-pymysql
-google-genai
+streamlit>=1.30.0
+pandas>=2.0.0
+sqlalchemy>=2.0.0
+pymysql>=1.1.0
+requests>=2.31.0
