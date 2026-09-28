@@ -9,7 +9,7 @@ from sqlalchemy.engine import URL
 # 1. CẤU HÌNH HỆ THỐNG & BẢO MẬT
 # ============================================================
 GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "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")
-APP_VERSION = "v14-groq-3model-selector"
+APP_VERSION = "v15-groq-2models"
 
 AIVEN_HOST = st.secrets.get("AIVEN_HOST", "mysql-3a5ef2bc-binhquytoc.a.aivencloud.com")
 AIVEN_PORT = int(st.secrets.get("AIVEN_PORT", 14483))
@@ -19,9 +19,8 @@ AIVEN_DATABASE = st.secrets.get("AIVEN_DATABASE", "defaultdb")
 
 ADMIN_PASSWORD = st.secrets.get("ADMIN_PASSWORD", "123456")
 
-# Danh sách 3 mô hình theo yêu cầu
+# Danh sách mô hình Chat khả dụng
 AVAILABLE_MODELS = [
-    "meta-llama/llama-prompt-guard-2-22m",
     "openai/gpt-oss-20b",
     "qwen/qwen3.8-27b"
 ]
@@ -130,7 +129,7 @@ if "admin_logged_in" not in st.session_state:
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
-if "selected_model" not in st.session_state:
+if "selected_model" not in st.session_state or st.session_state.selected_model not in AVAILABLE_MODELS:
     st.session_state.selected_model = AVAILABLE_MODELS[0]
 
 
@@ -633,9 +632,6 @@ elif page == "🤖 Groq AI":
         index=AVAILABLE_MODELS.index(st.session_state.selected_model) if st.session_state.selected_model in AVAILABLE_MODELS else 0
     )
     st.session_state.selected_model = selected_model
-
-    if selected_model == "meta-llama/llama-prompt-guard-2-22m":
-        st.warning("⚠️ **Lưu ý:** `llama-prompt-guard` là mô hình kiểm duyệt/phát hiện prompt injection, không dùng để sinh văn bản trả lời như LLM thông thường.")
 
     st.markdown("---")
 
