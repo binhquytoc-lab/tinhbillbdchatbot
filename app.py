@@ -1,18 +1,17 @@
 import pandas as pd
-import requests
 import streamlit as st
 from datetime import datetime
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL
+from google import genai
+from google.genai import types
 
 # ============================================================
 # 1. CẤU HÌNH HỆ THỐNG
 # ============================================================
 GEMINI_API_KEY = "AQ.Ab8RN6I3y7AcTqcPDfujdsImDFe-4ODOqMIEwlP7vtgTRg0PiQ"
-GEMINI_MODEL = "gemini-2.0-flash"  # Tên model chuẩn hiện tại
-
-# Khởi tạo Client bằng SDK chính thức mới (Tự động hỗ trợ Key dạng AQ...)
-client = genai.Client(api_key=GEMINI_API_KEY)
+GEMINI_MODEL = "gemini-2.0-flash"
+APP_VERSION = "v4-genai-sdk"
 
 AIVEN_HOST = "mysql-3a5ef2bc-binhquytoc.a.aivencloud.com"
 AIVEN_PORT = 14483
@@ -21,6 +20,9 @@ AIVEN_PASSWORD = "AVNS_TX2oBXmTGGjXba6p7j1"
 AIVEN_DATABASE = "defaultdb"
 
 ADMIN_PASSWORD = "123456"
+
+# Khởi tạo Client Gemini bằng SDK chính thức
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 
 # ============================================================
@@ -52,7 +54,6 @@ def get_db_engine():
         DATABASE_URL,
         pool_pre_ping=True,
         pool_recycle=1800,
-        # Aiven yêu cầu kết nối SSL; dict không rỗng sẽ bật SSL trong PyMySQL
         connect_args={"connect_timeout": 15, "ssl": {"check_hostname": False}},
         pool_size=5,
         max_overflow=5
@@ -279,7 +280,7 @@ def get_database_context():
 
 
 # ============================================================
-# 8. GỌI GEMINI API VIA NEW SDK
+# 8. GỌI GEMINI API VIA GOOGLE-GENAI SDK
 # ============================================================
 def ask_gemini(user_question):
     if not GEMINI_API_KEY:
@@ -313,18 +314,18 @@ def ask_gemini(user_question):
 """
 
     try:
-        # Gọi model thông qua client SDK chính thức
         response = client.models.generate_content(
             model=GEMINI_MODEL,
             contents=prompt,
             config=types.GenerateContentConfig(
                 system_instruction=system_instruction,
-            ),
+            )
         )
         return response.text
-
     except Exception as e:
         return f"❌ **Lỗi gọi Gemini API:** `{e}`"
+
+
 # ============================================================
 # 9. SIDEBAR
 # ============================================================
@@ -656,41 +657,21 @@ elif page == "🤖 Gemini AI":
 
     st.markdown("---")
 
-    with st.expander("🛠️ Chẩn đoán kết nối Gemini"):
+    with st.expander("🛠️ Chẩn đoán kết nối Gemini SDK"):
         st.write(f"Phiên bản code: **{APP_VERSION}**")
-        st.write(f"Key đang dùng: `{GEMINI_API_KEY[:6]}...{GEMINI_API_KEY[-4:]}` (độ dài {len(GEMINI_API_KEY)})")
+        st.write(f"Key đang dùng: `{GEMINI_API_KEY[:6]}...{GEMINI_API_KEY[-4:]}`")
         st.write(f"Model cấu hình: `{GEMINI_MODEL}`")
 
         if st.button("▶️ Chạy kiểm tra"):
-            token = GEMINI_API_KEY.strip()
-
-            st.write("**1. Danh sách model (AI Studio)**")
             try:
-                r = requests.get(
-                    "https://generativelanguage.googleapis.com/v1beta/models",
-                    headers={"x-goog-api-key": token},
-                    params={"pageSize": 100},
-                    timeout=30,
+                test_res = client.models.generate_content(
+                    model=GEMINI_MODEL,
+                    contents="Xin chào Gemini"
                 )
-                st.write(f"Mã trạng thái: {r.status_code}")
-                if r.status_code == 200:
-                    names = [m["name"] for m in r.json().get("models", [])]
-                    st.code("\n".join(names), language="text")
-                else:
-                    st.code(r.text[:1500], language="json")
+                st.success("🟢 Kết nối thành công!")
+                st.write(f"Phản hồi thử nghiệm: `{test_res.text}`")
             except Exception as e:
-                st.error(str(e))
-
-            test_payload = {"contents": [{"role": "user", "parts": [{"text": "Xin chào"}]}]}
-            for label, base in GEMINI_BASES:
-                st.write(f"**2. Gọi thử {label}**")
-                try:
-                    url = f"{base}/models/{GEMINI_MODEL}:generateContent"
-                    r = post_with_key(url, token, test_payload)
-                    st.write(f"Mã trạng thái: {r.status_code}")
-                    st.code(r.text[:1500], language="json")
-                except Exception as e:
-                    st.error(str(e))
+                st.error(f"🔴 Lỗi chẩn đoán SDK: {e}")
 
     st.markdown("---")
 
