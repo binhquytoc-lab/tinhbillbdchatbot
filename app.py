@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 import streamlit as st
 from datetime import datetime
@@ -5,18 +6,19 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL
 
 # ============================================================
-# 1. CẤU HÌNH HỆ THỐNG
+# 1. CẤU HÌNH HỆ THỐNG & BẢO MẬT
 # ============================================================
-GROQ_API_KEY = "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"
-APP_VERSION = "v12-groq-dynamic-model-fix"
+# Ưu tiên lấy Key từ st.secrets hoặc Environment Variable, nếu không có mới dùng fallback key
+GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "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")
+APP_VERSION = "v13-groq-guard-model-filter-fix"
 
-AIVEN_HOST = "mysql-3a5ef2bc-binhquytoc.a.aivencloud.com"
-AIVEN_PORT = 14483
-AIVEN_USER = "avnadmin"
-AIVEN_PASSWORD = "AVNS_TX2oBXmTGGjXba6p7j1"
-AIVEN_DATABASE = "defaultdb"
+AIVEN_HOST = st.secrets.get("AIVEN_HOST", "mysql-3a5ef2bc-binhquytoc.a.aivencloud.com")
+AIVEN_PORT = int(st.secrets.get("AIVEN_PORT", 14483))
+AIVEN_USER = st.secrets.get("AIVEN_USER", "avnadmin")
+AIVEN_PASSWORD = st.secrets.get("AIVEN_PASSWORD", "AVNS_TX2oBXmTGGjXba6p7j1")
+AIVEN_DATABASE = st.secrets.get("AIVEN_DATABASE", "defaultdb")
 
-ADMIN_PASSWORD = "123456"
+ADMIN_PASSWORD = st.secrets.get("ADMIN_PASSWORD", "123456")
 
 
 # ============================================================
@@ -37,7 +39,7 @@ DATABASE_URL = URL.create(
     username=AIVEN_USER,
     password=AIVEN_PASSWORD,
     host=AIVEN_HOST.strip(),
-    port=int(AIVEN_PORT),
+    port=AIVEN_PORT,
     database=AIVEN_DATABASE
 )
 
@@ -237,17 +239,24 @@ def get_database_context():
 
 
 # ============================================================
-# 8. XỬ LÝ GROQ AI (TỰ ĐỘNG LỌC VÀ CHỌN MODEL TỐI ƯU)
+# 8. XỬ LÝ GROQ AI (LỌC TRIỆT ĐỂ PROMPT-GUARD VÀ CÁC MODEL PHỤ)
 # ============================================================
 def get_active_groq_model(client):
     """
-    Lấy danh sách các model thực tế khả dụng từ API key để tránh lỗi 404 (model_not_found).
+    Lấy danh sách model khả dụng từ Groq API và loại bỏ các model không phải Chat/LLM 
+    như prompt-guard, whisper, vision, eval...
     """
     try:
         models = client.models.list()
         available_ids = [m.id for m in models.data]
         
-        # Thứ tự ưu tiên chọn model chất lượng cao nhất cho Tiếng Việt & Số liệu
+        # Danh sách từ khóa cấm (Model chuyên biệt không hỗ trợ Text Chat thông thường)
+        excluded_keywords = [
+            "prompt-guard", "guard", "whisper", "vision", 
+            "transcribe", "allam", "eval", "moderation", "distill"
+        ]
+        
+        # Ưu tiên các dòng LLM mạnh nhất hiện nay trên Groq
         priority_list = [
             "llama-3.3-70b-versatile",
             "llama-3.1-8b-instant",
@@ -257,23 +266,23 @@ def get_active_groq_model(client):
             "gemma2-9b-it"
         ]
         
+        # 1. Kiểm tra danh sách ưu tiên trước
         for preferred in priority_list:
             if preferred in available_ids:
                 return preferred
                 
-        # Nếu không trúng model ưu tiên, lọc bỏ model Whisper, Vision, Guard, Allam
+        # 2. Lọc danh sách các Chat model an toàn
         safe_chat_models = [
             m.id for m in models.data 
-            if "/" not in m.id 
-            and not any(excluded in m.id.lower() for excluded in ["allam", "whisper", "guard", "vision", "transcribe", "prompt-guard"])
+            if not any(keyword in m.id.lower() for keyword in excluded_keywords)
         ]
         
         if safe_chat_models:
             return safe_chat_models[0]
             
-        return available_ids[0] if available_ids else "llama-3.1-8b-instant"
+        return "llama-3.3-70b-versatile"
     except Exception:
-        return "llama-3.1-8b-instant"
+        return "llama-3.3-70b-versatile"
 
 
 def ask_groq(user_question):
