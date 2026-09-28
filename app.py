@@ -8,7 +8,7 @@ from sqlalchemy.engine import URL
 # 1. CẤU HÌNH HỆ THỐNG
 # ============================================================
 # Thay chuỗi gsk_... bằng API Key thực tế từ Groq Console (https://console.groq.com/keys)
-GROQ_API_KEY = "gsk_..."
+GROQ_API_KEY = "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"
 APP_VERSION = "v9-groq-model-filter-fix"
 
 AIVEN_HOST = "mysql-3a5ef2bc-binhquytoc.a.aivencloud.com"
