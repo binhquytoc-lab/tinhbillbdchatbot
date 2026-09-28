@@ -7,9 +7,9 @@ from sqlalchemy.engine import URL
 # ============================================================
 # 1. CẤU HÌNH HỆ THỐNG
 # ============================================================
-# Hãy thay chuỗi gsk_... bằng API Key thực tế từ Groq Console (https://console.groq.com/keys)
+# Thay chuỗi gsk_... bằng API Key thực tế từ Groq Console (https://console.groq.com/keys)
 GROQ_API_KEY = "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"
-APP_VERSION = "v7-groq-auto-model"
+APP_VERSION = "v8-groq-rate-limit-fix"
 
 AIVEN_HOST = "mysql-3a5ef2bc-binhquytoc.a.aivencloud.com"
 AIVEN_PORT = 14483
@@ -172,7 +172,7 @@ def load_history_from_db(show_error=True):
 
 
 # ============================================================
-# 7. TẠO DỮ LIỆU MYSQL CHO GROQ AI
+# 7. TẠO DỮ LIỆU MYSQL GỌN CHO GROQ AI (TIẾT KIỆM TOKEN)
 # ============================================================
 def get_database_context():
     if not db_connected:
@@ -185,21 +185,8 @@ def get_database_context():
             SELECT
                 COUNT(*) AS total_records,
                 COALESCE(SUM(quantity), 0) AS total_quantity,
-                COALESCE(SUM(total_price), 0) AS total_revenue,
-                COUNT(DISTINCT table_name) AS total_tables,
-                COUNT(DISTINCT item_name) AS total_items
+                COALESCE(SUM(total_price), 0) AS total_revenue
             FROM orders
-        """)
-
-        daily_sql = text("""
-            SELECT
-                DATE(created_at) AS order_date,
-                SUM(quantity) AS quantity,
-                SUM(total_price) AS revenue
-            FROM orders
-            GROUP BY DATE(created_at)
-            ORDER BY order_date DESC
-            LIMIT 30
         """)
 
         product_sql = text("""
@@ -210,27 +197,7 @@ def get_database_context():
             FROM orders
             GROUP BY item_name
             ORDER BY quantity DESC
-            LIMIT 30
-        """)
-
-        table_sql = text("""
-            SELECT
-                table_name,
-                SUM(quantity) AS quantity,
-                SUM(total_price) AS revenue
-            FROM orders
-            GROUP BY table_name
-            ORDER BY revenue DESC
-        """)
-
-        hourly_sql = text("""
-            SELECT
-                HOUR(created_at) AS hour,
-                SUM(quantity) AS quantity,
-                SUM(total_price) AS revenue
-            FROM orders
-            GROUP BY HOUR(created_at)
-            ORDER BY hour
+            LIMIT 10
         """)
 
         recent_sql = text("""
@@ -242,29 +209,20 @@ def get_database_context():
                 total_price
             FROM orders
             ORDER BY created_at DESC
-            LIMIT 100
+            LIMIT 15
         """)
 
         with engine.connect() as conn:
             summary = pd.read_sql(summary_sql, conn)
-            daily = pd.read_sql(daily_sql, conn)
             products = pd.read_sql(product_sql, conn)
-            tables = pd.read_sql(table_sql, conn)
-            hourly = pd.read_sql(hourly_sql, conn)
             recent = pd.read_sql(recent_sql, conn)
 
         parts = [
             "=== TỔNG QUAN DATABASE ===",
             summary.to_string(index=False),
-            "\n=== DOANH THU THEO NGÀY - 30 NGÀY GẦN NHẤT ===",
-            daily.to_string(index=False),
-            "\n=== MÓN BÁN NHIỀU ===",
+            "\n=== MÓN BÁN CHẠY NHẤT (TOP 10) ===",
             products.to_string(index=False),
-            "\n=== DOANH THU THEO BÀN ===",
-            tables.to_string(index=False),
-            "\n=== DOANH SỐ THEO GIỜ ===",
-            hourly.to_string(index=False),
-            "\n=== 100 GIAO DỊCH GẦN NHẤT ===",
+            "\n=== 15 GIAO DỊCH GẦN NHẤT ===",
             recent.to_string(index=False),
         ]
 
@@ -275,7 +233,7 @@ def get_database_context():
 
 
 # ============================================================
-# 8. XỬ LÝ GROQ AI (TỰ ĐỘNG LỰA CHỌN MODEL HOẠT ĐỘNG)
+# 8. XỬ LÝ GROQ AI (KHÓA RATE LIMIT & TỰ ĐỘNG CHỌN MODEL)
 # ============================================================
 def get_active_groq_model(client):
     """Lấy danh sách các model đang hoạt động trên Groq và chọn model tối ưu nhất"""
@@ -283,14 +241,12 @@ def get_active_groq_model(client):
         models = client.models.list()
         active_ids = [m.id for m in models.data]
         
-        # Danh sách ưu tiên theo thứ tự năng lực xử lý
+        # Llama 3.1 8b instant có hạn ngạch OTPM rất cao ở Free Tier
         priority_list = [
+            "llama-3.1-8b-instant",
             "llama-3.3-70b-versatile",
             "llama-3.3-70b-specdec",
-            "llama-3.1-8b-instant",
-            "deepseek-r1-distill-llama-70b",
             "qwen-2.5-32b",
-            "llama3-70b-8192",
             "llama3-8b-8192"
         ]
         
@@ -298,7 +254,6 @@ def get_active_groq_model(client):
             if preferred in active_ids:
                 return preferred
                 
-        # Nếu các model trên đều không có, lấy model khả dụng bất kỳ
         return active_ids[0] if active_ids else "llama-3.1-8b-instant"
     except Exception:
         return "llama-3.1-8b-instant"
@@ -312,30 +267,26 @@ def ask_groq(user_question):
         from groq import Groq
         client = Groq(api_key=GROQ_API_KEY)
         
-        # Tự động lấy tên model đang hoạt động
         selected_model = get_active_groq_model(client)
-        
         database_context = get_database_context()
 
-        previous_messages = st.session_state.chat_history[-10:]
+        # Giữ 4 câu gần nhất để tránh tràn ngữ cảnh
+        previous_messages = st.session_state.chat_history[-4:]
         history_text = ""
         for message in previous_messages:
             role = "Người dùng" if message["role"] == "user" else "AI"
             history_text += f"\n{role}: {message['content']}\n"
 
         system_instruction = (
-            "Bạn là trợ lý AI cho hệ thống quản lý nhà hàng.\n"
-            "QUY TẮC:\n"
-            "1. Trả lời bằng tiếng Việt ngắn gọn, rõ ràng.\n"
-            "2. Dựa vào DỮ LIỆU THỰC TẾ từ database MySQL để trả lời chính xác số liệu.\n"
-            "3. Định dạng số tiền VNĐ rõ ràng (VD: 150.000 VNĐ).\n"
+            "Bạn là trợ lý AI cho nhà hàng. Trả lời bằng tiếng Việt ngắn gọn, rõ ràng, súc tích (dưới 300 từ).\n"
+            "Dựa vào dữ liệu thực tế từ database để trả lời chính xác số liệu tiền VNĐ."
         )
 
         prompt = f"""
-=== DỮ LIỆU THỰC TẾ TỪ AIVEN MYSQL ===
+=== DỮ LIỆU THỰC TẾ MYSQL ===
 {database_context}
 
-=== LỊCH SỬ HỘI THOẠI ===
+=== LỊCH SỬ GẦN ĐÂY ===
 {history_text}
 
 === CÂU HỎI HIỆN TẠI ===
@@ -348,6 +299,7 @@ def ask_groq(user_question):
                 {"role": "user", "content": prompt}
             ],
             model=selected_model,
+            max_tokens=800,  # Giới hạn token đầu ra để vượt qua hạn ngạch Free Tier 1000 OTPM
         )
         return chat_completion.choices[0].message.content
     except Exception as e:
@@ -699,8 +651,9 @@ elif page == "🤖 Groq AI":
                 test_res = test_client.chat.completions.create(
                     messages=[{"role": "user", "content": "Xin chào"}],
                     model=active_model,
+                    max_tokens=100
                 )
-                st.success(f"🟢 Kết nối thành công! Tự động sử dụng mô hình `{active_model}`")
+                st.success(f"🟢 Kết nối thành công! Mô hình sử dụng: `{active_model}`")
                 st.write(f"Phản hồi thử nghiệm: `{test_res.choices[0].message.content}`")
             except Exception as e:
                 st.error(f"🔴 Lỗi chẩn đoán Groq SDK: {e}")
