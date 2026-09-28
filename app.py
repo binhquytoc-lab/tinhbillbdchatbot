@@ -7,8 +7,8 @@ from sqlalchemy.engine import URL
 # ============================================================
 # 1. CẤU HÌNH HỆ THỐNG
 # ============================================================
-# Thay bằng API Key chính thức của bạn lấy từ https://aistudio.google.com/
-GEMINI_API_KEY = "AQ.Ab8RN6ISf86scOBuWCfgpmNxJcLA4yuVvZ1_aXZg6ZkjfOfZ4Q"
+# Dán API Key chuẩn (bắt đầu bằng AIzaSy...) vào đây
+GEMINI_API_KEY = "AQ.Ab8RN6IYGUF6ILXgVKq9iGusriHG8T8HmUSNWVKoLtuTQ-7RKw"
 
 AIVEN_HOST = "mysql-3a5ef2bc-binhquytoc.a.aivencloud.com"
 AIVEN_PORT = 14483
@@ -18,12 +18,12 @@ AIVEN_DATABASE = "defaultdb"
 
 ADMIN_PASSWORD = "123456"
 
-# Sử dụng model Gemini 2.5 Flash chính thức
+# Sử dụng model Gemini 2.5 Flash
 GEMINI_MODEL = "gemini-2.5-flash"
 
 
 # ============================================================
-# 2. IMPORT GEMINI SDK (Hỗ trợ cả google-genai lẫn google-generativeai)
+# 2. IMPORT GEMINI SDK
 # ============================================================
 genai_type = None
 
@@ -296,14 +296,19 @@ def get_database_context():
 def ask_gemini(user_question):
     api_key = GEMINI_API_KEY.strip() if GEMINI_API_KEY else ""
 
-    if not api_key:
-        return "❌ Chưa cấu hình GEMINI_API_KEY ở đầu file."
+    if not api_key or api_key.startswith("DÁN_API_KEY"):
+        return "❌ Bạn chưa nhập Gemini API Key vào biến `GEMINI_API_KEY` ở đầu file `app.py`."
+
+    if not api_key.startswith("AIzaSy"):
+        return (
+            "⚠️ **API Key sai định dạng!**\n\n"
+            "Mã bạn vừa nhập (`AQ...`) là OAuth Token, không phải Gemini API Key.\n"
+            "Vui lòng vào [Google AI Studio](https://aistudio.google.com/app/apikey) "
+            "bấm **Create API Key** để lấy mã chuẩn bắt đầu bằng **`AIzaSy...`**."
+        )
 
     if genai_type is None:
-        return (
-            "❌ Chưa cài đặt thư viện Google GenAI.\n\n"
-            "Vui lòng chạy lệnh: `pip install google-genai`"
-        )
+        return "❌ Thư viện Google GenAI chưa được cài đặt. Hãy chạy: `pip install google-genai`"
 
     database_context = get_database_context()
 
@@ -316,10 +321,9 @@ def ask_gemini(user_question):
     system_instruction = """
 Bạn là trợ lý AI cho hệ thống quản lý nhà hàng.
 QUY TẮC:
-1. Trả lời bằng tiếng Việt ngắn gọn, dễ hiểu.
-2. Dựa vào DỮ LIỆU THỰC TẾ từ database MySQL để trả lời chính xác số liệu.
-3. Định dạng số tiền VNĐ rõ ràng (VD: 150.000 VNĐ).
-4. Không tiết lộ thông tin mật như password, API key.
+1. Trả lời bằng tiếng Việt ngắn gọn, rõ ràng.
+2. Dựa vào DỮ LIỆU THỰC TẾ từ database MySQL được cung cấp để phân tích.
+3. Định dạng tiền tệ theo VNĐ (VD: 150.000 VNĐ).
 """
 
     prompt = f"""
@@ -337,33 +341,26 @@ QUY TẮC:
 
     try:
         if genai_type == "new":
-            # Dùng thư viện google-genai chính thức
             client = genai.Client(api_key=api_key)
             response = client.models.generate_content(
                 model=GEMINI_MODEL,
                 contents=prompt
             )
             return response.text
-
         elif genai_type == "legacy":
-            # Fallback dùng thư viện google-generativeai cũ nếu chưa nâng cấp
             legacy_genai.configure(api_key=api_key)
             model = legacy_genai.GenerativeModel("gemini-1.5-flash")
             response = model.generate_content(prompt)
             return response.text
 
     except Exception as e:
-        err_msg = str(e)
-        if "401" in err_msg or "UNAUTHENTICATED" in err_msg or "API_KEY_INVALID" in err_msg:
+        err_str = str(e)
+        if "401" in err_str or "UNAUTHENTICATED" in err_str:
             return (
-                "❌ **Lỗi xác thực API Key (401 UNAUTHENTICATED)**:\n\n"
-                "API Key hiện tại không hợp lệ hoặc đã bị vô hiệu hóa.\n\n"
-                "👉 **Cách khắc phục:**\n"
-                "1. Truy cập [Google AI Studio](https://aistudio.google.com/app/apikey) để tạo 1 API Key mới.\n"
-                "2. Mở file `app.py` và dán API Key mới vào biến `GEMINI_API_KEY` ở đầu file.\n"
-                "3. Khởi động lại ứng dụng Streamlit."
+                "❌ **Lỗi 401 UNAUTHENTICATED:** API Key không hợp lệ.\n\n"
+                "Hãy kiểm tra xem API Key lấy từ Google AI Studio đã được kích hoạt chưa."
             )
-        return f"❌ Lỗi khi kết nối tới Gemini API:\n\n`{err_msg}`"
+        return f"❌ Lỗi khi kết nối Gemini API: `{err_str}`"
 
 
 # ============================================================
@@ -426,7 +423,6 @@ if page == "🍽️ Order":
         )
 
         price = menu[category][item]
-
         st.write(f"**Đơn giá:** {price:,.0f} VNĐ")
 
         quantity = st.number_input(
@@ -691,10 +687,10 @@ elif page == "🤖 Gemini AI":
             st.error("🔴 Aiven MySQL: CHƯA KẾT NỐI")
 
     with col_status2:
-        if GEMINI_API_KEY and len(GEMINI_API_KEY.strip()) >= 10:
-            st.success("🟢 Gemini API Key: ĐÃ CẤU HÌNH")
+        if GEMINI_API_KEY and GEMINI_API_KEY.strip().startswith("AIzaSy"):
+            st.success("🟢 Gemini API Key: ĐÃ CẤU HÌNH CỤ THỂ")
         else:
-            st.error("🔴 Gemini API Key: CHƯA CẤU HÌNH")
+            st.error("🔴 Gemini API Key: CHƯA ĐÚNG ĐỊNH DẠNG (Cần mã AIzaSy...)")
 
     st.markdown("---")
 
