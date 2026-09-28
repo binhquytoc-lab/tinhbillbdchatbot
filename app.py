@@ -24,7 +24,7 @@ AIVEN_DATABASE = "defaultdb"
 ADMIN_PASSWORD = "123456"
 
 # Model Gemini hiện dùng
-GEMINI_MODEL = "gemini-3.8-flash"
+GEMINI_MODEL = "gemini-2.5-flash"
 
 
 # ============================================================
