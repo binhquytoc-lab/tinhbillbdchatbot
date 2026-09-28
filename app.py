@@ -7,9 +7,12 @@ from sqlalchemy.engine import URL
 
 # ============================================================
 # 1. CẤU HÌNH HỆ THỐNG
-GEMINI_API_KEY = "AQ.Ab8RN6IKSScqtViSQ1qO6m_fT1XlwlwrQveL0l8xuhVL3XnvgA"
-GEMINI_MODEL = "gemini-1.5-flash"  # Sửa model hợp lệ
-APP_VERSION = "v3-diagnostic"
+# ============================================================
+GEMINI_API_KEY = "AQ.Ab8RN6I3y7AcTqcPDfujdsImDFe-4ODOqMIEwlP7vtgTRg0PiQ"
+GEMINI_MODEL = "gemini-2.0-flash"  # Tên model chuẩn hiện tại
+
+# Khởi tạo Client bằng SDK chính thức mới (Tự động hỗ trợ Key dạng AQ...)
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 AIVEN_HOST = "mysql-3a5ef2bc-binhquytoc.a.aivencloud.com"
 AIVEN_PORT = 14483
@@ -276,14 +279,10 @@ def get_database_context():
 
 
 # ============================================================
-# ============================================================
-# ============================================================
-# 8. GỌI GEMINI API (CÁCH SỬA CHO KEY FORMAT AQ...)
+# 8. GỌI GEMINI API VIA NEW SDK
 # ============================================================
 def ask_gemini(user_question):
-    token = GEMINI_API_KEY.strip() if GEMINI_API_KEY else ""
-
-    if not token:
+    if not GEMINI_API_KEY:
         return "❌ Chưa cấu hình GEMINI_API_KEY ở đầu file."
 
     database_context = get_database_context()
@@ -313,38 +312,19 @@ def ask_gemini(user_question):
 {user_question}
 """
 
-    payload = {
-        "systemInstruction": {"parts": [{"text": system_instruction}]},
-        "contents": [
-            {"role": "user", "parts": [{"text": prompt}]}
-        ],
-    }
-
-    # 1. URL bỏ tham số ?key=... ở cuối
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
-    
-    # 2. Truyền API Key qua Header x-goog-api-key (bắt buộc đối với key AQ...)
-    headers = {
-        "Content-Type": "application/json",
-        "x-goog-api-key": token
-    }
-
     try:
-        response = requests.post(url, headers=headers, json=payload, timeout=60)
-        res_json = response.json()
-
-        if response.status_code == 200:
-            try:
-                parts = res_json["candidates"][0]["content"]["parts"]
-                return "".join(p.get("text", "") for p in parts)
-            except (KeyError, IndexError):
-                return "⚠️ Không lấy được câu trả lời từ phản hồi của Gemini."
-        else:
-            err_msg = res_json.get("error", {}).get("message", response.text)
-            return f"❌ **Lỗi Gemini API ({response.status_code}):** `{err_msg}`"
+        # Gọi model thông qua client SDK chính thức
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=system_instruction,
+            ),
+        )
+        return response.text
 
     except Exception as e:
-        return f"❌ **Lỗi kết nối:** `{e}`"
+        return f"❌ **Lỗi gọi Gemini API:** `{e}`"
 # ============================================================
 # 9. SIDEBAR
 # ============================================================
