@@ -8,9 +8,8 @@ from sqlalchemy.engine import URL
 # ============================================================
 # 1. CẤU HÌNH HỆ THỐNG & BẢO MẬT
 # ============================================================
-# Ưu tiên lấy Key từ st.secrets hoặc Environment Variable, nếu không có mới dùng fallback key
 GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "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")
-APP_VERSION = "v13-groq-guard-model-filter-fix"
+APP_VERSION = "v14-groq-3model-selector"
 
 AIVEN_HOST = st.secrets.get("AIVEN_HOST", "mysql-3a5ef2bc-binhquytoc.a.aivencloud.com")
 AIVEN_PORT = int(st.secrets.get("AIVEN_PORT", 14483))
@@ -19,6 +18,13 @@ AIVEN_PASSWORD = st.secrets.get("AIVEN_PASSWORD", "AVNS_TX2oBXmTGGjXba6p7j1")
 AIVEN_DATABASE = st.secrets.get("AIVEN_DATABASE", "defaultdb")
 
 ADMIN_PASSWORD = st.secrets.get("ADMIN_PASSWORD", "123456")
+
+# Danh sách 3 mô hình theo yêu cầu
+AVAILABLE_MODELS = [
+    "meta-llama/llama-prompt-guard-2-22m",
+    "openai/gpt-oss-20b",
+    "qwen/qwen3.8-27b"
+]
 
 
 # ============================================================
@@ -124,6 +130,9 @@ if "admin_logged_in" not in st.session_state:
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
+if "selected_model" not in st.session_state:
+    st.session_state.selected_model = AVAILABLE_MODELS[0]
+
 
 # ============================================================
 # 6. ĐỌC LỊCH SỬ GIAO DỊCH
@@ -182,32 +191,26 @@ def get_database_context():
         return "DATABASE_STATUS: Hiện chưa có giao dịch nào được ghi nhận trong cơ sở dữ liệu."
 
     try:
-        # 1. Tổng quan Doanh thu & Sản lượng
         tong_doanh_thu = df["Thành tiền"].sum()
         tong_mon_ban = df["Số lượng"].sum()
         tong_don_hang = len(df)
 
-        # 2. Thống kê theo Tất cả sản phẩm
         df_product = df.groupby("Tên món").agg(
             So_Luong_Ban=("Số lượng", "sum"),
             Doanh_Thu_VND=("Thành tiền", "sum")
         ).reset_index().sort_values(by="So_Luong_Ban", ascending=False)
 
-        # 3. Thống kê theo Ngày
         df_copy = df.copy()
         df_copy["Thời gian"] = pd.to_datetime(df_copy["Thời gian"])
         df_copy["Ngày"] = df_copy["Thời gian"].dt.strftime("%Y-%m-%d")
         df_daily = df_copy.groupby("Ngày")["Thành tiền"].sum().reset_index()
 
-        # 4. Thống kê theo Tháng
         df_copy["Tháng-Năm"] = df_copy["Thời gian"].dt.strftime("%m/%Y")
         df_monthly = df_copy.groupby("Tháng-Năm")["Thành tiền"].sum().reset_index()
 
-        # 5. Thống kê theo Khung giờ
         df_copy["Giờ"] = df_copy["Thời gian"].dt.hour
         df_hourly = df_copy.groupby("Giờ")["Số lượng"].sum().reset_index()
 
-        # 6. Top 20 giao dịch mới nhất
         recent_df = df[["ID", "Thời gian", "Bàn", "Tên món", "Số lượng", "Thành tiền"]].head(20)
 
         parts = [
@@ -239,53 +242,9 @@ def get_database_context():
 
 
 # ============================================================
-# 8. XỬ LÝ GROQ AI (LỌC TRIỆT ĐỂ PROMPT-GUARD VÀ CÁC MODEL PHỤ)
+# 8. XỬ LÝ GROQ AI TÙY CHỌN MÔ HÌNH
 # ============================================================
-def get_active_groq_model(client):
-    """
-    Lấy danh sách model khả dụng từ Groq API và loại bỏ các model không phải Chat/LLM 
-    như prompt-guard, whisper, vision, eval...
-    """
-    try:
-        models = client.models.list()
-        available_ids = [m.id for m in models.data]
-        
-        # Danh sách từ khóa cấm (Model chuyên biệt không hỗ trợ Text Chat thông thường)
-        excluded_keywords = [
-            "prompt-guard", "guard", "whisper", "vision", 
-            "transcribe", "allam", "eval", "moderation", "distill"
-        ]
-        
-        # Ưu tiên các dòng LLM mạnh nhất hiện nay trên Groq
-        priority_list = [
-            "llama-3.3-70b-versatile",
-            "llama-3.1-8b-instant",
-            "llama3-70b-8192",
-            "llama3-8b-8192",
-            "mixtral-8x7b-32768",
-            "gemma2-9b-it"
-        ]
-        
-        # 1. Kiểm tra danh sách ưu tiên trước
-        for preferred in priority_list:
-            if preferred in available_ids:
-                return preferred
-                
-        # 2. Lọc danh sách các Chat model an toàn
-        safe_chat_models = [
-            m.id for m in models.data 
-            if not any(keyword in m.id.lower() for keyword in excluded_keywords)
-        ]
-        
-        if safe_chat_models:
-            return safe_chat_models[0]
-            
-        return "llama-3.3-70b-versatile"
-    except Exception:
-        return "llama-3.3-70b-versatile"
-
-
-def ask_groq(user_question):
+def ask_groq(user_question, model_name):
     if not GROQ_API_KEY or GROQ_API_KEY == "gsk_...":
         return "❌ Chưa cấu hình GROQ_API_KEY hợp lệ ở đầu file."
 
@@ -293,7 +252,6 @@ def ask_groq(user_question):
         from groq import Groq
         client = Groq(api_key=GROQ_API_KEY)
         
-        selected_model = get_active_groq_model(client)
         database_context = get_database_context()
 
         previous_messages = st.session_state.chat_history[-4:]
@@ -321,18 +279,20 @@ def ask_groq(user_question):
 {user_question}
 """
 
+        # Thực hiện gọi API tới model đã chọn
         chat_completion = client.chat.completions.create(
             messages=[
                 {"role": "system", "content": system_instruction},
                 {"role": "user", "content": prompt}
             ],
-            model=selected_model,
+            model=model_name,
             max_tokens=1000,
             temperature=0.1
         )
         return chat_completion.choices[0].message.content
+
     except Exception as e:
-        return f"❌ **Lỗi gọi Groq API:** `{e}`"
+        return f"❌ **Lỗi gọi Groq API ({model_name}):** `{e}`"
 
 
 # ============================================================
@@ -666,26 +626,39 @@ elif page == "🤖 Groq AI":
 
     st.markdown("---")
 
+    # Bảng chọn Mô hình trực tiếp
+    selected_model = st.selectbox(
+        "🎯 Chọn mô hình AI đang hoạt động:",
+        AVAILABLE_MODELS,
+        index=AVAILABLE_MODELS.index(st.session_state.selected_model) if st.session_state.selected_model in AVAILABLE_MODELS else 0
+    )
+    st.session_state.selected_model = selected_model
+
+    if selected_model == "meta-llama/llama-prompt-guard-2-22m":
+        st.warning("⚠️ **Lưu ý:** `llama-prompt-guard` là mô hình kiểm duyệt/phát hiện prompt injection, không dùng để sinh văn bản trả lời như LLM thông thường.")
+
+    st.markdown("---")
+
     with st.expander("🛠️ Chẩn đoán kết nối Groq SDK"):
         st.write(f"Phiên bản code: **{APP_VERSION}**")
         masked_key = f"{GROQ_API_KEY[:6]}...{GROQ_API_KEY[-4:]}" if len(GROQ_API_KEY) > 10 else "Chưa điền"
         st.write(f"Key đang dùng: `{masked_key}`")
+        st.write(f"Mô hình được chọn: `{selected_model}`")
 
         if st.button("▶️ Chạy kiểm tra"):
             try:
                 from groq import Groq
                 test_client = Groq(api_key=GROQ_API_KEY)
-                active_model = get_active_groq_model(test_client)
                 
                 test_res = test_client.chat.completions.create(
                     messages=[{"role": "user", "content": "Xin chào"}],
-                    model=active_model,
-                    max_tokens=100
+                    model=selected_model,
+                    max_tokens=50
                 )
-                st.success(f"🟢 Kết nối thành công! Mô hình đang hoạt động: `{active_model}`")
+                st.success(f"🟢 Kết nối thành công! Mô hình đang hoạt động: `{selected_model}`")
                 st.write(f"Phản hồi thử nghiệm: `{test_res.choices[0].message.content}`")
             except Exception as e:
-                st.error(f"🔴 Lỗi chẩn đoán Groq SDK: {e}")
+                st.error(f"🔴 Lỗi chẩn đoán Groq SDK ({selected_model}): {e}")
 
     st.markdown("---")
 
@@ -706,8 +679,8 @@ elif page == "🤖 Groq AI":
             st.markdown(user_question)
 
         with st.chat_message("assistant"):
-            with st.spinner("🔎 Đang đọc dữ liệu MySQL và hỏi Groq AI..."):
-                answer = ask_groq(user_question)
+            with st.spinner(f"🔎 Đang gửi câu hỏi đến mô hình `{selected_model}`..."):
+                answer = ask_groq(user_question, selected_model)
             st.markdown(answer)
 
         st.session_state.chat_history.append({"role": "user", "content": user_question})
