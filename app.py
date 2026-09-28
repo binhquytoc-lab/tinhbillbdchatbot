@@ -8,7 +8,7 @@ from sqlalchemy.engine import URL
 # ============================================================
 # 1. CẤU HÌNH HỆ THỐNG
 GEMINI_API_KEY = "AQ.Ab8RN6IKSScqtViSQ1qO6m_fT1XlwlwrQveL0l8xuhVL3XnvgA"
-GEMINI_MODEL = "gemini-2.0-flash"  # Sửa model hợp lệ
+GEMINI_MODEL = "gemini-1.5-flash"  # Sửa model hợp lệ
 APP_VERSION = "v3-diagnostic"
 
 AIVEN_HOST = "mysql-3a5ef2bc-binhquytoc.a.aivencloud.com"
