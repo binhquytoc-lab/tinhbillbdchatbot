@@ -8,7 +8,7 @@ from sqlalchemy.engine import URL
 # ============================================================
 # 1. CẤU HÌNH HỆ THỐNG
 # ============================================================
-GEMINI_API_KEY = "AQ.Ab8RN6KkMnXjTb47PlDwYnyFL-TjQOs6l5101xQ5WsY8tBVM-A"
+GEMINI_API_KEY = "AQ.Ab8RN6IlH6ZYtHrIuRipn4F7axgCGBDW6RxR3O5YtdPCzsJyLw"
 GEMINI_MODEL = "gemini-3.8-flash"
 
 AIVEN_HOST = "mysql-3a5ef2bc-binhquytoc.a.aivencloud.com"
@@ -281,16 +281,14 @@ def get_database_context():
 #    - Key "AIza..." -> Google AI Studio
 #    Không dùng "Authorization: Bearer" (chỉ dành cho OAuth token)
 # ============================================================
-def get_gemini_url(token):
-    if token.startswith("AQ."):
-        return (
-            "https://aiplatform.googleapis.com/v1/publishers/google/models/"
-            f"{GEMINI_MODEL}:generateContent"
-        )
-    return (
+def get_gemini_urls():
+    # Thử AI Studio trước, sau đó tới Vertex AI (key có thể thuộc một trong hai)
+    return [
         "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{GEMINI_MODEL}:generateContent"
-    )
+        f"{GEMINI_MODEL}:generateContent",
+        "https://aiplatform.googleapis.com/v1/publishers/google/models/"
+        f"{GEMINI_MODEL}:generateContent",
+    ]
 
 
 def ask_gemini(user_question):
@@ -326,8 +324,6 @@ def ask_gemini(user_question):
 {user_question}
 """
 
-    url = get_gemini_url(token)
-
     payload = {
         "systemInstruction": {"parts": [{"text": system_instruction}]},
         "contents": [
@@ -335,18 +331,11 @@ def ask_gemini(user_question):
         ],
     }
 
-    try:
-        # Cách 1: truyền key qua query string
-        response = requests.post(
-            url,
-            params={"key": token},
-            headers={"Content-Type": "application/json"},
-            json=payload,
-            timeout=60,
-        )
+    last_error = ""
 
-        # Cách 2 (dự phòng): truyền key qua header x-goog-api-key
-        if response.status_code in (401, 403):
+    for url in get_gemini_urls():
+        try:
+            # Key gửi qua header x-goog-api-key (KHÔNG dùng Bearer)
             response = requests.post(
                 url,
                 headers={
@@ -357,23 +346,34 @@ def ask_gemini(user_question):
                 timeout=60,
             )
 
-        res_json = response.json()
+            # Dự phòng: gửi key qua query string
+            if response.status_code in (401, 403, 404):
+                response = requests.post(
+                    url,
+                    params={"key": token},
+                    headers={"Content-Type": "application/json"},
+                    json=payload,
+                    timeout=60,
+                )
 
-        if response.status_code == 200:
-            try:
-                parts = res_json["candidates"][0]["content"]["parts"]
-                return "".join(p.get("text", "") for p in parts)
-            except (KeyError, IndexError):
-                return "⚠️ Không lấy được câu trả lời từ phản hồi của Gemini."
-        else:
-            # Vertex có thể trả về list thay vì dict khi lỗi
+            res_json = response.json()
+
+            if response.status_code == 200:
+                try:
+                    parts = res_json["candidates"][0]["content"]["parts"]
+                    return "".join(p.get("text", "") for p in parts)
+                except (KeyError, IndexError):
+                    return "⚠️ Không lấy được câu trả lời từ phản hồi của Gemini."
+
             if isinstance(res_json, list) and res_json:
                 res_json = res_json[0]
             err_msg = res_json.get("error", {}).get("message", response.text)
-            return f"❌ **Lỗi API Gemini ({response.status_code}):**\n\n`{err_msg}`"
+            last_error = f"❌ **Lỗi API Gemini ({response.status_code}):**\n\n`{err_msg}`"
 
-    except Exception as e:
-        return f"❌ Lỗi kết nối HTTP tới Gemini API:\n\n`{str(e)}`"
+        except Exception as e:
+            last_error = f"❌ Lỗi kết nối HTTP tới Gemini API:\n\n`{str(e)}`"
+
+    return last_error
 
 
 # ============================================================
