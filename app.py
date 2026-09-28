@@ -5,8 +5,9 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL
 
 # ============================================================
-# 1. CẤU HÌNH TRỰC TIẾP TRONG APP.PY
+# 1. CẤU HÌNH HỆ THỐNG
 # ============================================================
+# Thay bằng API Key chính thức của bạn lấy từ https://aistudio.google.com/
 GEMINI_API_KEY = "AQ.Ab8RN6ISf86scOBuWCfgpmNxJcLA4yuVvZ1_aXZg6ZkjfOfZ4Q"
 
 AIVEN_HOST = "mysql-3a5ef2bc-binhquytoc.a.aivencloud.com"
@@ -17,17 +18,24 @@ AIVEN_DATABASE = "defaultdb"
 
 ADMIN_PASSWORD = "123456"
 
-# Model Gemini hiện dùng
+# Sử dụng model Gemini 2.5 Flash chính thức
 GEMINI_MODEL = "gemini-2.5-flash"
 
 
 # ============================================================
-# 2. IMPORT GEMINI
+# 2. IMPORT GEMINI SDK (Hỗ trợ cả google-genai lẫn google-generativeai)
 # ============================================================
+genai_type = None
+
 try:
     from google import genai
+    genai_type = "new"
 except ImportError:
-    genai = None
+    try:
+        import google.generativeai as legacy_genai
+        genai_type = "legacy"
+    except ImportError:
+        genai_type = None
 
 
 # ============================================================
@@ -283,68 +291,38 @@ def get_database_context():
 
 
 # ============================================================
-# 9. GEMINI CLIENT
+# 9. GEMINI CLIENT & HÀM GỌI API
 # ============================================================
-@st.cache_resource
-def get_gemini_client(api_key):
-    if not api_key or genai is None:
-        return None
-    return genai.Client(api_key=api_key)
-
-
 def ask_gemini(user_question):
-    # Đã điều chỉnh logic kiểm tra API key
-    if not GEMINI_API_KEY or len(GEMINI_API_KEY.strip()) < 10:
+    api_key = GEMINI_API_KEY.strip() if GEMINI_API_KEY else ""
+
+    if not api_key:
+        return "❌ Chưa cấu hình GEMINI_API_KEY ở đầu file."
+
+    if genai_type is None:
         return (
-            "❌ Chưa cấu hình Gemini API key hợp lệ.\n\n"
-            "Vui lòng kiểm tra lại biến GEMINI_API_KEY ở đầu file."
+            "❌ Chưa cài đặt thư viện Google GenAI.\n\n"
+            "Vui lòng chạy lệnh: `pip install google-genai`"
         )
 
-    if genai is None:
-        return (
-            "❌ Chưa cài đặt thư viện google-genai.\n\n"
-            "Thêm dòng sau vào requirements.txt:\n"
-            "google-genai"
-        )
+    database_context = get_database_context()
 
-    try:
-        client = get_gemini_client(GEMINI_API_KEY)
+    previous_messages = st.session_state.chat_history[-10:]
+    history_text = ""
+    for message in previous_messages:
+        role = "Người dùng" if message["role"] == "user" else "Gemini"
+        history_text += f"\n{role}: {message['content']}\n"
 
-        if client is None:
-            return "❌ Không thể khởi tạo Gemini Client."
-
-        database_context = get_database_context()
-
-        previous_messages = st.session_state.chat_history[-12:]
-
-        history_text = ""
-        for message in previous_messages:
-            role = "Người dùng" if message["role"] == "user" else "Gemini"
-            history_text += (
-                f"\n{role}: {message['content']}\n"
-            )
-
-        system_instruction = """
+    system_instruction = """
 Bạn là trợ lý AI cho hệ thống quản lý nhà hàng.
-
 QUY TẮC:
-1. Trả lời bằng tiếng Việt.
-2. Với câu hỏi về doanh thu, đơn hàng, món bán chạy,
-   số lượng, bàn, ngày, giờ hoặc dữ liệu nhà hàng,
-   phải ưu tiên dữ liệu DATABASE được cung cấp.
-3. Không tự bịa số liệu.
-4. Nếu database không đủ dữ liệu, nói:
-   "Dữ liệu hiện tại chưa đủ để xác định."
-5. Có thể tính toán từ dữ liệu database được cung cấp.
-6. Tiền phải hiển thị dễ đọc theo VNĐ.
-7. Phân biệt dữ liệu thực tế và nhận xét/gợi ý.
-8. Không tiết lộ API key, mật khẩu MySQL,
-   hostname, username hoặc thông tin bí mật.
-9. Chỉ đọc dữ liệu. Không được xóa, sửa hoặc thêm dữ liệu MySQL.
-10. Trả lời ngắn gọn, rõ ràng, dùng bảng/bullet khi phù hợp.
+1. Trả lời bằng tiếng Việt ngắn gọn, dễ hiểu.
+2. Dựa vào DỮ LIỆU THỰC TẾ từ database MySQL để trả lời chính xác số liệu.
+3. Định dạng số tiền VNĐ rõ ràng (VD: 150.000 VNĐ).
+4. Không tiết lộ thông tin mật như password, API key.
 """
 
-        prompt = f"""
+    prompt = f"""
 {system_instruction}
 
 === DỮ LIỆU THỰC TẾ TỪ AIVEN MYSQL ===
@@ -357,25 +335,35 @@ QUY TẮC:
 {user_question}
 """
 
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=prompt
-        )
+    try:
+        if genai_type == "new":
+            # Dùng thư viện google-genai chính thức
+            client = genai.Client(api_key=api_key)
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=prompt
+            )
+            return response.text
 
-        answer = getattr(response, "text", None)
-
-        if not answer:
-            return "Gemini không trả về nội dung."
-
-        return answer
+        elif genai_type == "legacy":
+            # Fallback dùng thư viện google-generativeai cũ nếu chưa nâng cấp
+            legacy_genai.configure(api_key=api_key)
+            model = legacy_genai.GenerativeModel("gemini-1.5-flash")
+            response = model.generate_content(prompt)
+            return response.text
 
     except Exception as e:
-        return (
-            "❌ Lỗi khi gọi Gemini API:\n\n"
-            f"{e}\n\n"
-            "Nếu gặp lỗi liên quan đến model/API Key, hãy kiểm tra "
-            "lại GEMINI_API_KEY và GEMINI_MODEL ở đầu file."
-        )
+        err_msg = str(e)
+        if "401" in err_msg or "UNAUTHENTICATED" in err_msg or "API_KEY_INVALID" in err_msg:
+            return (
+                "❌ **Lỗi xác thực API Key (401 UNAUTHENTICATED)**:\n\n"
+                "API Key hiện tại không hợp lệ hoặc đã bị vô hiệu hóa.\n\n"
+                "👉 **Cách khắc phục:**\n"
+                "1. Truy cập [Google AI Studio](https://aistudio.google.com/app/apikey) để tạo 1 API Key mới.\n"
+                "2. Mở file `app.py` và dán API Key mới vào biến `GEMINI_API_KEY` ở đầu file.\n"
+                "3. Khởi động lại ứng dụng Streamlit."
+            )
+        return f"❌ Lỗi khi kết nối tới Gemini API:\n\n`{err_msg}`"
 
 
 # ============================================================
@@ -405,10 +393,8 @@ else:
 # ============================================================
 if page == "🍽️ Order":
 
-    st.title("🍽️ Hệ thống Order Nhà Hàng_Dr Bình")
-    st.caption(
-        "Ghi nhận order và lưu dữ liệu trực tiếp lên Aiven MySQL"
-    )
+    st.title("🍽️ Hệ thống Order Nhà Hàng")
+    st.caption("Ghi nhận order và lưu dữ liệu trực tiếp lên Aiven MySQL")
 
     if db_connected:
         st.success("🟢 Aiven MySQL: ĐÃ KẾT NỐI")
@@ -450,10 +436,7 @@ if page == "🍽️ Order":
             value=1
         )
 
-        if st.button(
-            "➕ Thêm vào giỏ",
-            use_container_width=True
-        ):
+        if st.button("➕ Thêm vào giỏ", use_container_width=True):
             if item in st.session_state.order_dict:
                 st.session_state.order_dict[item]["Số lượng"] += quantity
                 st.session_state.order_dict[item]["Thành tiền"] = (
@@ -476,83 +459,51 @@ if page == "🍽️ Order":
         st.subheader("🛒 Giỏ hàng hiện tại")
 
         if st.session_state.order_dict:
-
             df = pd.DataFrame.from_dict(
                 st.session_state.order_dict,
                 orient="index"
             )
 
             st.dataframe(
-                df[
-                    [
-                        "Bàn",
-                        "Tên món",
-                        "Đơn giá",
-                        "Số lượng",
-                        "Thành tiền"
-                    ]
-                ],
+                df[["Bàn", "Tên món", "Đơn giá", "Số lượng", "Thành tiền"]],
                 use_container_width=True,
                 hide_index=True
             )
 
             tam_tinh = df["Thành tiền"].sum()
-
-            giam_gia = (
-                tam_tinh * 0.05
-                if tam_tinh > 1_000_000
-                else 0
-            )
-
+            giam_gia = tam_tinh * 0.05 if tam_tinh > 1_000_000 else 0
             tong_thanh_toan = tam_tinh - giam_gia
 
             st.write(f"**Tạm tính:** {tam_tinh:,.0f} VNĐ")
-
             if giam_gia > 0:
-                st.write(
-                    f"**Giảm giá 5%:** -{giam_gia:,.0f} VNĐ"
-                )
+                st.write(f"**Giảm giá 5%:** -{giam_gia:,.0f} VNĐ")
 
-            st.metric(
-                "💰 Tổng thanh toán",
-                f"{tong_thanh_toan:,.0f} VNĐ"
-            )
+            st.metric("💰 Tổng thanh toán", f"{tong_thanh_toan:,.0f} VNĐ")
 
             st.markdown("---")
 
             col_btn1, col_btn2 = st.columns(2)
 
             with col_btn1:
-                if st.button(
-                    "💳 Thanh toán",
-                    use_container_width=True
-                ):
-
+                if st.button("💳 Thanh toán", use_container_width=True):
                     if not db_connected:
-                        st.error(
-                            "Không thể thanh toán vì Aiven MySQL chưa kết nối."
-                        )
+                        st.error("Không thể thanh toán vì MySQL chưa kết nối.")
                     else:
                         now_time = datetime.now()
-
-                        records = []
-
-                        for row in st.session_state.order_dict.values():
-                            records.append(
-                                {
-                                    "created_at": now_time,
-                                    "table_name": row["Bàn"],
-                                    "item_name": row["Tên món"],
-                                    "quantity": row["Số lượng"],
-                                    "total_price": row["Thành tiền"],
-                                }
-                            )
+                        records = [
+                            {
+                                "created_at": now_time,
+                                "table_name": row["Bàn"],
+                                "item_name": row["Tên món"],
+                                "quantity": row["Số lượng"],
+                                "total_price": row["Thành tiền"],
+                            }
+                            for row in st.session_state.order_dict.values()
+                        ]
 
                         try:
                             engine = get_db_engine()
-
                             df_to_save = pd.DataFrame(records)
-
                             df_to_save.to_sql(
                                 "orders",
                                 engine,
@@ -561,30 +512,18 @@ if page == "🍽️ Order":
                             )
 
                             st.success("✅ Thanh toán thành công!")
-                            st.success(
-                                "Dữ liệu đã được lưu vào Aiven MySQL."
-                            )
-
                             st.session_state.order_dict = {}
-
                             st.rerun()
 
                         except Exception as e:
                             st.error(f"❌ Lỗi lưu dữ liệu: {e}")
 
             with col_btn2:
-                if st.button(
-                    "🗑️ Xóa toàn bộ giỏ",
-                    use_container_width=True
-                ):
+                if st.button("🗑️ Xóa toàn bộ giỏ", use_container_width=True):
                     st.session_state.order_dict = {}
                     st.rerun()
-
         else:
-            st.info(
-                "🛒 Giỏ hàng đang trống. "
-                "Hãy chọn món bên trái để lên đơn."
-            )
+            st.info("🛒 Giỏ hàng đang trống. Hãy chọn món bên trái để lên đơn.")
 
 
 # ============================================================
@@ -595,20 +534,11 @@ elif page == "🔑 Admin":
     st.title("🔑 Trang Quản Trị & Phân Tích Doanh Thu")
 
     if not st.session_state.admin_logged_in:
-
         with st.form("admin_login_form"):
-
-            password = st.text_input(
-                "🔐 Nhập mật khẩu quản trị",
-                type="password"
-            )
-
-            login_submitted = st.form_submit_button(
-                "🔑 Đăng nhập"
-            )
+            password = st.text_input("🔐 Nhập mật khẩu quản trị", type="password")
+            login_submitted = st.form_submit_button("🔑 Đăng nhập")
 
             if login_submitted:
-
                 if password == ADMIN_PASSWORD:
                     st.session_state.admin_logged_in = True
                     st.success("Đăng nhập thành công!")
@@ -622,9 +552,7 @@ elif page == "🔑 Admin":
     col_header_title, col_header_btn = st.columns([4, 1])
 
     with col_header_title:
-        st.success(
-            "🟢 Xác thực quyền Quản trị viên thành công!"
-        )
+        st.success("🟢 Xác thực quyền Quản trị viên thành công!")
 
     with col_header_btn:
         if st.button("🔒 Đăng xuất"):
@@ -639,348 +567,110 @@ elif page == "🔑 Admin":
         ]
     )
 
-    # --------------------------------------------------------
-    # TAB 1: MENU
-    # --------------------------------------------------------
     with tab1:
-
         st.subheader("🍽️ Menu hiện hành của nhà hàng")
+        data = [
+            [cat, item_name, p]
+            for cat in menu
+            for item_name, p in menu[cat].items()
+        ]
+        df_menu = pd.DataFrame(data, columns=["Phân loại", "Tên món", "Đơn giá (VNĐ)"])
+        st.dataframe(df_menu, use_container_width=True, hide_index=True)
 
-        data = []
-
-        for category_name in menu:
-            for item_name, price in menu[category_name].items():
-                data.append(
-                    [
-                        category_name,
-                        item_name,
-                        price
-                    ]
-                )
-
-        df_menu = pd.DataFrame(
-            data,
-            columns=[
-                "Phân loại",
-                "Tên món",
-                "Đơn giá (VNĐ)"
-            ]
-        )
-
-        st.dataframe(
-            df_menu,
-            use_container_width=True,
-            hide_index=True
-        )
-
-    # --------------------------------------------------------
-    # TAB 2: DOANH THU
-    # --------------------------------------------------------
     with tab2:
-
         st.subheader("💰 Doanh thu & Hóa đơn thực tế")
-
         df_history = load_history_from_db()
 
         if not df_history.empty:
-
             tong_doanh_thu = df_history["Thành tiền"].sum()
             tong_mon = df_history["Số lượng"].sum()
 
             col_met1, col_met2 = st.columns(2)
-
             with col_met1:
-                st.metric(
-                    "💰 Tổng doanh thu",
-                    f"{tong_doanh_thu:,.0f} VNĐ"
-                )
-
+                st.metric("💰 Tổng doanh thu", f"{tong_doanh_thu:,.0f} VNĐ")
             with col_met2:
-                st.metric(
-                    "🍽️ Số lượng món đã phục vụ",
-                    f"{tong_mon} phần"
-                )
+                st.metric("🍽️ Số lượng món đã phục vụ", f"{tong_mon} phần")
 
             st.markdown("---")
-
             st.subheader("📅 Doanh thu theo ngày")
 
-            df_history["Ngày"] = pd.to_datetime(
-                df_history["Thời gian"]
-            ).dt.date
+            df_history["Ngày"] = pd.to_datetime(df_history["Thời gian"]).dt.date
+            df_daily = df_history.groupby("Ngày")["Thành tiền"].sum().reset_index()
+            df_daily.columns = ["Ngày", "Doanh thu (VNĐ)"]
 
-            df_daily_revenue = (
-                df_history
-                .groupby("Ngày")["Thành tiền"]
-                .sum()
-                .reset_index()
-            )
-
-            df_daily_revenue.columns = [
-                "Ngày",
-                "Doanh thu (VNĐ)"
-            ]
-
-            col_chart_day, col_table_day = st.columns(
-                [1.5, 1]
-            )
-
+            col_chart_day, col_table_day = st.columns([1.5, 1])
             with col_chart_day:
-                st.bar_chart(
-                    df_daily_revenue.set_index("Ngày")[
-                        "Doanh thu (VNĐ)"
-                    ]
-                )
-
+                st.bar_chart(df_daily.set_index("Ngày")["Doanh thu (VNĐ)"])
             with col_table_day:
                 st.dataframe(
-                    df_daily_revenue.style.format(
-                        {
-                            "Doanh thu (VNĐ)": "{:,.0f} VNĐ"
-                        }
-                    ),
+                    df_daily.style.format({"Doanh thu (VNĐ)": "{:,.0f} VNĐ"}),
                     use_container_width=True,
                     hide_index=True
                 )
 
             st.markdown("---")
-
-            st.subheader(
-                "📋 Chi tiết lịch sử thanh toán thực tế"
-            )
-
+            st.subheader("📋 Chi tiết lịch sử thanh toán thực tế")
             st.dataframe(
-                df_history[
-                    [
-                        "ID",
-                        "Thời gian",
-                        "Bàn",
-                        "Tên món",
-                        "Số lượng",
-                        "Thành tiền"
-                    ]
-                ],
+                df_history[["ID", "Thời gian", "Bàn", "Tên món", "Số lượng", "Thành tiền"]],
                 use_container_width=True,
                 hide_index=True
             )
-
         else:
             st.info("Hệ thống chưa ghi nhận giao dịch nào.")
 
-    # --------------------------------------------------------
-    # TAB 3: PHÂN TÍCH
-    # --------------------------------------------------------
     with tab3:
-
-        st.subheader(
-            "📊 Thống kê & Phân tích bán hàng REAL-TIME"
-        )
-
+        st.subheader("📊 Thống kê & Phân tích bán hàng REAL-TIME")
         df_anal = load_history_from_db()
 
         if not df_anal.empty:
-
-            df_anal["Thời gian"] = pd.to_datetime(
-                df_anal["Thời gian"]
-            )
-
+            df_anal["Thời gian"] = pd.to_datetime(df_anal["Thời gian"])
             df_anal["Giờ"] = df_anal["Thời gian"].dt.hour
+            df_anal["Tháng-Năm"] = df_anal["Thời gian"].dt.strftime("%m/%Y")
 
-            df_anal["Tháng-Năm"] = (
-                df_anal["Thời gian"]
-                .dt.strftime("%m/%Y")
-            )
+            product_qty = df_anal.groupby("Tên món")["Số lượng"].sum()
+            best_seller = product_qty.idxmax()
+            best_seller_qty = product_qty.max()
 
-            product_quantity = (
-                df_anal
-                .groupby("Tên món")["Số lượng"]
-                .sum()
-            )
-
-            best_seller = product_quantity.idxmax()
-            best_seller_qty = product_quantity.max()
-
-            hourly_sales = (
-                df_anal
-                .groupby("Giờ")["Số lượng"]
-                .sum()
-            )
-
+            hourly_sales = df_anal.groupby("Giờ")["Số lượng"].sum()
             best_hour = hourly_sales.idxmax()
             best_hour_qty = hourly_sales.max()
 
-            monthly_revenue = (
-                df_anal
-                .groupby("Tháng-Năm")["Thành tiền"]
-                .sum()
-            )
-
-            best_month = monthly_revenue.idxmax()
-            best_month_rev = monthly_revenue.max()
+            monthly_rev = df_anal.groupby("Tháng-Năm")["Thành tiền"].sum()
+            best_month = monthly_rev.idxmax()
+            best_month_rev = monthly_rev.max()
 
             col_kpi1, col_kpi2, col_kpi3 = st.columns(3)
-
             with col_kpi1:
                 st.info("🏆 MÓN BÁN CHẠY NHẤT")
-                st.metric(
-                    label=best_seller,
-                    value=f"{best_seller_qty} phần"
-                )
-
+                st.metric(label=best_seller, value=f"{best_seller_qty} phần")
             with col_kpi2:
                 st.warning("⚡ KHUNG GIỜ BÁN NHIỀU NHẤT")
                 st.metric(
-                    label=(
-                        f"{best_hour:02d}:00 - "
-                        f"{(best_hour + 1) % 24:02d}:00"
-                    ),
+                    label=f"{best_hour:02d}:00 - {(best_hour + 1) % 24:02d}:00",
                     value=f"{best_hour_qty} phần"
                 )
-
             with col_kpi3:
                 st.success("📅 THÁNG DOANH THU CAO NHẤT")
-                st.metric(
-                    label=f"Tháng {best_month}",
-                    value=f"{best_month_rev:,.0f} VNĐ"
-                )
+                st.metric(label=f"Tháng {best_month}", value=f"{best_month_rev:,.0f} VNĐ")
 
             st.markdown("---")
-
             st.subheader("🍔 Doanh thu & số lượng từng món")
-
             summary_mon = (
-                df_anal
-                .groupby("Tên món")
-                .agg(
-                    Số_lượng_bán=("Số lượng", "sum"),
-                    Doanh_thu=("Thành tiền", "sum")
-                )
+                df_anal.groupby("Tên món")
+                .agg(Số_lượng_bán=("Số lượng", "sum"), Doanh_thu=("Thành tiền", "sum"))
                 .reset_index()
-                .sort_values(
-                    by="Số_lượng_bán",
-                    ascending=False
-                )
+                .sort_values(by="Số_lượng_bán", ascending=False)
             )
 
             col_chart1, col_table1 = st.columns([1.5, 1])
-
             with col_chart1:
-                st.bar_chart(
-                    summary_mon.set_index("Tên món")[
-                        "Số_lượng_bán"
-                    ]
-                )
-
+                st.bar_chart(summary_mon.set_index("Tên món")["Số_lượng_bán"])
             with col_table1:
                 st.dataframe(
-                    summary_mon.style.format(
-                        {"Doanh_thu": "{:,.0f} VNĐ"}
-                    ),
+                    summary_mon.style.format({"Doanh_thu": "{:,.0f} VNĐ"}),
                     use_container_width=True,
                     hide_index=True
                 )
-
-            st.markdown("---")
-
-            st.subheader("⏰ Số lượng món bán theo giờ")
-
-            summary_gio = (
-                df_anal
-                .groupby("Giờ")
-                .agg(
-                    Số_lượng_món=("Số lượng", "sum"),
-                    Doanh_thu=("Thành tiền", "sum")
-                )
-                .reset_index()
-            )
-
-            all_hours = pd.DataFrame({"Giờ": range(24)})
-
-            summary_gio = (
-                pd.merge(
-                    all_hours,
-                    summary_gio,
-                    on="Giờ",
-                    how="left"
-                )
-                .fillna(0)
-            )
-
-            col_chart2, col_info2 = st.columns([1.5, 1])
-
-            with col_chart2:
-                st.bar_chart(
-                    summary_gio.set_index("Giờ")[
-                        "Số_lượng_món"
-                    ]
-                )
-
-            with col_info2:
-                st.write(
-                    "**Khung giờ bán nhiều nhất:** "
-                    f"{best_hour:02d}:00 - "
-                    f"{(best_hour + 1) % 24:02d}:00"
-                )
-
-                st.write(
-                    f"**Số lượng:** {best_hour_qty} phần"
-                )
-
-                st.dataframe(
-                    summary_gio[
-                        summary_gio["Số_lượng_món"] > 0
-                    ].style.format(
-                        {"Doanh_thu": "{:,.0f} VNĐ"}
-                    ),
-                    use_container_width=True,
-                    hide_index=True
-                )
-
-            st.markdown("---")
-
-            st.subheader("📅 Doanh thu bán hàng theo tháng")
-
-            df_anal["Tháng_Số"] = (
-                df_anal["Thời gian"].dt.month
-            )
-
-            summary_thang = (
-                df_anal
-                .groupby(
-                    ["Tháng_Số", "Tháng-Năm"]
-                )
-                .agg(
-                    Số_lượng_bán=("Số lượng", "sum"),
-                    Doanh_thu=("Thành tiền", "sum")
-                )
-                .reset_index()
-                .sort_values("Tháng_Số")
-            )
-
-            col_chart3, col_table3 = st.columns([1.5, 1])
-
-            with col_chart3:
-                st.bar_chart(
-                    summary_thang.set_index("Tháng-Năm")[
-                        "Doanh_thu"
-                    ]
-                )
-
-            with col_table3:
-                st.dataframe(
-                    summary_thang[
-                        [
-                            "Tháng-Năm",
-                            "Số_lượng_bán",
-                            "Doanh_thu"
-                        ]
-                    ].style.format(
-                        {"Doanh_thu": "{:,.0f} VNĐ"}
-                    ),
-                    use_container_width=True,
-                    hide_index=True
-                )
-
         else:
             st.info("Chưa có dữ liệu giao dịch để thống kê.")
 
@@ -991,14 +681,9 @@ elif page == "🔑 Admin":
 elif page == "🤖 Gemini AI":
 
     st.title("🤖 Gemini AI - Trợ lý dữ liệu nhà hàng")
-
-    st.caption(
-        "Gemini đọc dữ liệu hiện tại từ Aiven MySQL "
-        "và trả lời câu hỏi về đơn hàng, doanh thu và bán hàng."
-    )
+    st.caption("Gemini đọc dữ liệu từ Aiven MySQL và hỗ trợ trả lời phân tích.")
 
     col_status1, col_status2 = st.columns(2)
-
     with col_status1:
         if db_connected:
             st.success("🟢 Aiven MySQL: ĐÃ KẾT NỐI")
@@ -1007,29 +692,13 @@ elif page == "🤖 Gemini AI":
 
     with col_status2:
         if GEMINI_API_KEY and len(GEMINI_API_KEY.strip()) >= 10:
-            st.success("🟢 Gemini API: ĐÃ CẤU HÌNH")
+            st.success("🟢 Gemini API Key: ĐÃ CẤU HÌNH")
         else:
-            st.error("🔴 Gemini API: CHƯA CẤU HÌNH")
+            st.error("🔴 Gemini API Key: CHƯA CẤU HÌNH")
 
     st.markdown("---")
 
-    with st.expander("💡 Bạn có thể hỏi Gemini những gì?"):
-        st.markdown("""
-        - Tổng doanh thu hiện tại là bao nhiêu?
-        - Có bao nhiêu giao dịch?
-        - Món nào bán nhiều nhất?
-        - Bàn nào có doanh thu cao nhất?
-        - Khung giờ nào bán nhiều nhất?
-        - Doanh thu 30 ngày gần nhất?
-        - Có bao nhiêu món đã bán?
-        - Hãy phân tích tình hình bán hàng.
-        - So sánh doanh thu giữa các món.
-        - Tóm tắt tình hình kinh doanh.
-        """)
-
-    if st.button(
-        "🗑️ Xóa lịch sử hội thoại"
-    ):
+    if st.button("🗑️ Xóa lịch sử hội thoại"):
         st.session_state.chat_history = []
         st.rerun()
 
@@ -1039,34 +708,17 @@ elif page == "🤖 Gemini AI":
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    user_question = st.chat_input(
-        "Hỏi Gemini về dữ liệu nhà hàng..."
-    )
+    user_question = st.chat_input("Hỏi Gemini về dữ liệu nhà hàng...")
 
     if user_question:
-
-        st.session_state.chat_history.append(
-            {
-                "role": "user",
-                "content": user_question
-            }
-        )
+        st.session_state.chat_history.append({"role": "user", "content": user_question})
 
         with st.chat_message("user"):
             st.markdown(user_question)
 
         with st.chat_message("assistant"):
-
-            with st.spinner(
-                "🔎 Đang đọc dữ liệu MySQL và hỏi Gemini..."
-            ):
+            with st.spinner("🔎 Đang đọc dữ liệu MySQL và hỏi Gemini..."):
                 answer = ask_gemini(user_question)
-
             st.markdown(answer)
 
-        st.session_state.chat_history.append(
-            {
-                "role": "assistant",
-                "content": answer
-            }
-        )
+        st.session_state.chat_history.append({"role": "assistant", "content": answer})
