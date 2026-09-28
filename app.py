@@ -274,12 +274,12 @@ def get_database_context():
 
 
 # ============================================================
-# 8. GỌI GEMINI API CHO ĐỊNH DẠNG AQ... KEY (Sử dụng REST Header)
+# 8. GỌI GEMINI API SỬ DỤNG DẠNG TOKEN (BEARER AUTHENTICATION)
 # ============================================================
 def ask_gemini(user_question):
-    api_key = GEMINI_API_KEY.strip() if GEMINI_API_KEY else ""
+    token = GEMINI_API_KEY.strip() if GEMINI_API_KEY else ""
 
-    if not api_key:
+    if not token:
         return "❌ Chưa cấu hình GEMINI_API_KEY ở đầu file."
 
     database_context = get_database_context()
@@ -312,9 +312,13 @@ def ask_gemini(user_question):
 """
 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+
+    # Trường hợp khóa AQ... cần gửi dưới dạng OAuth/Bearer Token hoặc API Key trong URL/Header
+    # Thử gửi đồng thời cả Authorization Header lẫn x-goog-api-key để đảm bảo tương thích
     headers = {
         "Content-Type": "application/json",
-        "x-goog-api-key": api_key
+        "Authorization": f"Bearer {token}",
+        "x-goog-api-key": token
     }
     payload = {
         "contents": [
@@ -328,6 +332,13 @@ def ask_gemini(user_question):
 
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=30)
+        
+        # Nếu gửi Bearer thất bại, fallback sang dạng API Key Query Parameter
+        if response.status_code == 401:
+            fallback_url = f"{url}?key={token}"
+            fallback_headers = {"Content-Type": "application/json"}
+            response = requests.post(fallback_url, headers=fallback_headers, json=payload, timeout=30)
+
         res_json = response.json()
 
         if response.status_code == 200:
@@ -669,9 +680,9 @@ elif page == "🤖 Gemini AI":
 
     with col_status2:
         if GEMINI_API_KEY and len(GEMINI_API_KEY.strip()) > 10:
-            st.success("🟢 Gemini API Key: ĐÃ CẤU HÌNH")
+            st.success("🟢 Gemini Token/Key: ĐÃ CẤU HÌNH")
         else:
-            st.error("🔴 Gemini API Key: CHƯA CẤU HÌNH")
+            st.error("🔴 Gemini Token/Key: CHƯA CẤU HÌNH")
 
     st.markdown("---")
 
