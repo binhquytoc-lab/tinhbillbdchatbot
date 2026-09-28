@@ -9,7 +9,7 @@ from sqlalchemy.engine import URL
 # ============================================================
 # Thay chuỗi gsk_... bằng API Key thực tế từ Groq Console (https://console.groq.com/keys)
 GROQ_API_KEY = "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"
-APP_VERSION = "v9-groq-model-filter-fix"
+APP_VERSION = "v10-groq-third-party-filter-fix"
 
 AIVEN_HOST = "mysql-3a5ef2bc-binhquytoc.a.aivencloud.com"
 AIVEN_PORT = 14483
@@ -233,33 +233,38 @@ def get_database_context():
 
 
 # ============================================================
-# 8. XỬ LÝ GROQ AI (LỌC CHAT MODEL & GIỚI HẠN RATE LIMIT)
+# 8. XỬ LÝ GROQ AI (LỌC CHAT MODEL CHUẨN & TRÁNH THIRD-PARTY)
 # ============================================================
 def get_active_groq_model(client):
-    """Lấy danh sách các model chat khả thi trên Groq và chọn model tối ưu nhất"""
+    """Chỉ chọn các model Chat chính chủ, miễn phí, không bị dính Terms/Rate Limit"""
     try:
         models = client.models.list()
         
-        # Lọc bỏ hoàn toàn các model Whisper (STT), Guard, Vision chuyên dụng
-        chat_models = [
-            m.id for m in models.data 
-            if not any(excluded in m.id.lower() for excluded in ["whisper", "guard", "vision", "transcribe", "prompt-guard"])
-        ]
-        
-        # Ưu tiên các model Text Chat ổn định và hạn ngạch Free Tier lớn
+        # Danh sách ưu tiên các model text chat tiêu chuẩn miễn phí
         priority_list = [
             "llama-3.1-8b-instant",
             "llama-3.3-70b-versatile",
             "qwen-2.5-32b",
-            "llama3-8b-8192"
+            "llama3-8b-8192",
+            "mixtral-8x7b-32768"
         ]
         
+        # Lấy danh sách ID từ API
+        available_ids = [m.id for m in models.data]
+        
+        # Kiểm tra xem có model ưu tiên nào đang online không
         for preferred in priority_list:
-            if preferred in chat_models:
+            if preferred in available_ids:
                 return preferred
                 
-        # Trả về model text chat hợp lệ đầu tiên nếu không trúng priority list
-        return chat_models[0] if chat_models else "llama-3.1-8b-instant"
+        # Lọc an toàn: Bỏ whisper, guard, vision và bỏ các model thuộc 3rd party chứa '/'
+        safe_chat_models = [
+            m.id for m in models.data 
+            if "/" not in m.id  # Loại bỏ các model kiểu 'canopylabs/...'
+            and not any(excluded in m.id.lower() for excluded in ["whisper", "guard", "vision", "transcribe", "prompt-guard"])
+        ]
+        
+        return safe_chat_models[0] if safe_chat_models else "llama-3.1-8b-instant"
     except Exception:
         return "llama-3.1-8b-instant"
 
@@ -304,7 +309,7 @@ def ask_groq(user_question):
                 {"role": "user", "content": prompt}
             ],
             model=selected_model,
-            max_tokens=800,  # Giới hạn token đầu ra để vượt qua hạn ngạch Free Tier 1000 OTPM
+            max_tokens=800,  # Giới hạn token đầu ra tránh đụng trần Free Tier
         )
         return chat_completion.choices[0].message.content
     except Exception as e:
