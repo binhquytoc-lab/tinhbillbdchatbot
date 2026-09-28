@@ -8,8 +8,8 @@ from sqlalchemy.engine import URL
 # 1. CẤU HÌNH HỆ THỐNG
 # ============================================================
 # Thay chuỗi gsk_... bằng API Key thực tế từ Groq Console (https://console.groq.com/keys)
-GROQ_API_KEY = "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"
-APP_VERSION = "v8-groq-rate-limit-fix"
+GROQ_API_KEY = "gsk_..."
+APP_VERSION = "v9-groq-model-filter-fix"
 
 AIVEN_HOST = "mysql-3a5ef2bc-binhquytoc.a.aivencloud.com"
 AIVEN_PORT = 14483
@@ -233,28 +233,33 @@ def get_database_context():
 
 
 # ============================================================
-# 8. XỬ LÝ GROQ AI (KHÓA RATE LIMIT & TỰ ĐỘNG CHỌN MODEL)
+# 8. XỬ LÝ GROQ AI (LỌC CHAT MODEL & GIỚI HẠN RATE LIMIT)
 # ============================================================
 def get_active_groq_model(client):
-    """Lấy danh sách các model đang hoạt động trên Groq và chọn model tối ưu nhất"""
+    """Lấy danh sách các model chat khả thi trên Groq và chọn model tối ưu nhất"""
     try:
         models = client.models.list()
-        active_ids = [m.id for m in models.data]
         
-        # Llama 3.1 8b instant có hạn ngạch OTPM rất cao ở Free Tier
+        # Lọc bỏ hoàn toàn các model Whisper (STT), Guard, Vision chuyên dụng
+        chat_models = [
+            m.id for m in models.data 
+            if not any(excluded in m.id.lower() for excluded in ["whisper", "guard", "vision", "transcribe", "prompt-guard"])
+        ]
+        
+        # Ưu tiên các model Text Chat ổn định và hạn ngạch Free Tier lớn
         priority_list = [
             "llama-3.1-8b-instant",
             "llama-3.3-70b-versatile",
-            "llama-3.3-70b-specdec",
             "qwen-2.5-32b",
             "llama3-8b-8192"
         ]
         
         for preferred in priority_list:
-            if preferred in active_ids:
+            if preferred in chat_models:
                 return preferred
                 
-        return active_ids[0] if active_ids else "llama-3.1-8b-instant"
+        # Trả về model text chat hợp lệ đầu tiên nếu không trúng priority list
+        return chat_models[0] if chat_models else "llama-3.1-8b-instant"
     except Exception:
         return "llama-3.1-8b-instant"
 
