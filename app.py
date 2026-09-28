@@ -9,7 +9,7 @@ from google.genai import types
 # ============================================================
 # 1. CẤU HÌNH HỆ THỐNG
 # ============================================================
-GEMINI_API_KEY = "AQ.Ab8RN6I3y7AcTqcPDfujdsImDFe-4ODOqMIEwlP7vtgTRg0PiQ"
+GEMINI_API_KEY = "AIzaSyDP3TCevhiu4Sl0REhFJS48qF_o46shq0E"
 GEMINI_MODEL = "gemini-1.5-flash"
 APP_VERSION = "v4-genai-sdk"
 
