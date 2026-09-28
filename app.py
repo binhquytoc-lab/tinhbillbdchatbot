@@ -7,18 +7,12 @@ from sqlalchemy.engine import URL
 # ============================================================
 # 1. CẤU HÌNH TRỰC TIẾP TRONG APP.PY
 # ============================================================
-# BẠN CHỈ CẦN SỬA CÁC GIÁ TRỊ TRONG KHỐI NÀY.
-#
-# Lưu ý: không đăng API key/password thật lên GitHub công khai.
-# Google hỗ trợ truyền API key trực tiếp vào genai.Client(...),
-# nhưng khuyến cáo giữ key bí mật.
+GEMINI_API_KEY = "AQ.Ab8RN6ISf86scOBuWCfgpmNxJcLA4yuVvZ1_aXZg6ZkjfOfZ4Q"
 
-GEMINI_API_KEY = "AQ.Ab8RN6ISf86scOBuWCfgpmNxJcLA4yuVvZ1_aXZg6ZkjfOfZ4Q" # SỬA API KEY
-
-AIVEN_HOST = "mysql-3a5ef2bc-binhquytoc.a.aivencloud.com" # SỬA HOST
-AIVEN_PORT = 14483 # SỬA PORT
-AIVEN_USER = "avnadmin" # SỬA USER
-AIVEN_PASSWORD = "AVNS_TX2oBXmTGGjXba6p7j1" # SỬA PASSWORD
+AIVEN_HOST = "mysql-3a5ef2bc-binhquytoc.a.aivencloud.com"
+AIVEN_PORT = 14483
+AIVEN_USER = "avnadmin"
+AIVEN_PASSWORD = "AVNS_TX2oBXmTGGjXba6p7j1"
 AIVEN_DATABASE = "defaultdb"
 
 ADMIN_PASSWORD = "123456"
@@ -299,17 +293,16 @@ def get_gemini_client(api_key):
 
 
 def ask_gemini(user_question):
-    if not GEMINI_API_KEY or GEMINI_API_KEY.startswith("DAN_"):
+    # Đã điều chỉnh logic kiểm tra API key
+    if not GEMINI_API_KEY or len(GEMINI_API_KEY.strip()) < 10:
         return (
-            "❌ Bạn chưa nhập Gemini API key.\n\n"
-            "Mở đầu file app.py và thay:\n"
-            'GEMINI_API_KEY = "DAN_GEMINI_API_KEY_CUA_BAN_VAO_DAY"\n'
-            "bằng API key thật của bạn."
+            "❌ Chưa cấu hình Gemini API key hợp lệ.\n\n"
+            "Vui lòng kiểm tra lại biến GEMINI_API_KEY ở đầu file."
         )
 
     if genai is None:
         return (
-            "❌ Chưa cài google-genai.\n\n"
+            "❌ Chưa cài đặt thư viện google-genai.\n\n"
             "Thêm dòng sau vào requirements.txt:\n"
             "google-genai"
         )
@@ -364,7 +357,6 @@ QUY TẮC:
 {user_question}
 """
 
-        # SDK Google GenAI hiện tại
         response = client.models.generate_content(
             model=GEMINI_MODEL,
             contents=prompt
@@ -381,8 +373,8 @@ QUY TẮC:
         return (
             "❌ Lỗi khi gọi Gemini API:\n\n"
             f"{e}\n\n"
-            "Nếu lỗi liên quan model/API key, hãy kiểm tra "
-            "GEMINI_API_KEY và GEMINI_MODEL ở đầu file."
+            "Nếu gặp lỗi liên quan đến model/API Key, hãy kiểm tra "
+            "lại GEMINI_API_KEY và GEMINI_MODEL ở đầu file."
         )
 
 
@@ -1014,7 +1006,7 @@ elif page == "🤖 Gemini AI":
             st.error("🔴 Aiven MySQL: CHƯA KẾT NỐI")
 
     with col_status2:
-        if GEMINI_API_KEY and not GEMINI_API_KEY.startswith("DAN_"):
+        if GEMINI_API_KEY and len(GEMINI_API_KEY.strip()) >= 10:
             st.success("🟢 Gemini API: ĐÃ CẤU HÌNH")
         else:
             st.error("🔴 Gemini API: CHƯA CẤU HÌNH")
