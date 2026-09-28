@@ -5,3 +5,8 @@ SQLAlchemy>=2.0.0
 PyMySQL>=1.1.0
 cryptography>=42.0.0
 google-genai
+streamlit
+pandas
+sqlalchemy
+pymysql
+google-genai
