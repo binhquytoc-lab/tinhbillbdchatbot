@@ -9,6 +9,7 @@ from sqlalchemy.engine import URL
 # 1. CẤU HÌNH HỆ THỐNG
 # ============================================================
 GEMINI_API_KEY = "AQ.Ab8RN6IYGUF6ILXgVKq9iGusriHG8T8HmUSNWVKoLtuTQ-7RKw"
+GEMINI_MODEL = "gemini-2.5-flash"
 
 AIVEN_HOST = "mysql-3a5ef2bc-binhquytoc.a.aivencloud.com"
 AIVEN_PORT = 14483
@@ -17,8 +18,6 @@ AIVEN_PASSWORD = "AVNS_TX2oBXmTGGjXba6p7j1"
 AIVEN_DATABASE = "defaultdb"
 
 ADMIN_PASSWORD = "123456"
-
-GEMINI_MODEL = "gemini-2.5-flash"
 
 
 # ============================================================
@@ -50,7 +49,8 @@ def get_db_engine():
         DATABASE_URL,
         pool_pre_ping=True,
         pool_recycle=1800,
-        connect_args={"connect_timeout": 15},
+        # Aiven yêu cầu kết nối SSL; dict không rỗng sẽ bật SSL trong PyMySQL
+        connect_args={"connect_timeout": 15, "ssl": {"check_hostname": False}},
         pool_size=5,
         max_overflow=5
     )
@@ -147,9 +147,11 @@ def load_history_from_db(show_error=True):
             ORDER BY created_at DESC
         """)
 
-        df = pd.read_sql(sql, engine)
+        with engine.connect() as conn:
+            df = pd.read_sql(sql, conn)
 
         if not df.empty:
+            df["total_price"] = df["total_price"].astype(float)
             df.rename(
                 columns={
                     "id": "ID",
@@ -274,8 +276,23 @@ def get_database_context():
 
 
 # ============================================================
-# 8. GỌI GEMINI API SỬ DỤNG DẠNG TOKEN (BEARER AUTHENTICATION)
+# 8. GỌI GEMINI API
+#    - Key "AQ...."  -> Vertex AI (Express Mode)
+#    - Key "AIza..." -> Google AI Studio
+#    Không dùng "Authorization: Bearer" (chỉ dành cho OAuth token)
 # ============================================================
+def get_gemini_url(token):
+    if token.startswith("AQ."):
+        return (
+            "https://aiplatform.googleapis.com/v1/publishers/google/models/"
+            f"{GEMINI_MODEL}:generateContent"
+        )
+    return (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{GEMINI_MODEL}:generateContent"
+    )
+
+
 def ask_gemini(user_question):
     token = GEMINI_API_KEY.strip() if GEMINI_API_KEY else ""
 
@@ -299,8 +316,6 @@ def ask_gemini(user_question):
     )
 
     prompt = f"""
-{system_instruction}
-
 === DỮ LIỆU THỰC TẾ TỪ AIVEN MYSQL ===
 {database_context}
 
@@ -311,43 +326,49 @@ def ask_gemini(user_question):
 {user_question}
 """
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+    url = get_gemini_url(token)
 
-    # Trường hợp khóa AQ... cần gửi dưới dạng OAuth/Bearer Token hoặc API Key trong URL/Header
-    # Thử gửi đồng thời cả Authorization Header lẫn x-goog-api-key để đảm bảo tương thích
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {token}",
-        "x-goog-api-key": token
-    }
     payload = {
+        "systemInstruction": {"parts": [{"text": system_instruction}]},
         "contents": [
-            {
-                "parts": [
-                    {"text": prompt}
-                ]
-            }
-        ]
+            {"role": "user", "parts": [{"text": prompt}]}
+        ],
     }
 
     try:
-        response = requests.post(url, headers=headers, json=payload, timeout=30)
-        
-        # Nếu gửi Bearer thất bại, fallback sang dạng API Key Query Parameter
-        if response.status_code == 401:
-            fallback_url = f"{url}?key={token}"
-            fallback_headers = {"Content-Type": "application/json"}
-            response = requests.post(fallback_url, headers=fallback_headers, json=payload, timeout=30)
+        # Cách 1: truyền key qua query string
+        response = requests.post(
+            url,
+            params={"key": token},
+            headers={"Content-Type": "application/json"},
+            json=payload,
+            timeout=60,
+        )
+
+        # Cách 2 (dự phòng): truyền key qua header x-goog-api-key
+        if response.status_code in (401, 403):
+            response = requests.post(
+                url,
+                headers={
+                    "Content-Type": "application/json",
+                    "x-goog-api-key": token,
+                },
+                json=payload,
+                timeout=60,
+            )
 
         res_json = response.json()
 
         if response.status_code == 200:
             try:
-                answer = res_json["candidates"][0]["content"]["parts"][0]["text"]
-                return answer
+                parts = res_json["candidates"][0]["content"]["parts"]
+                return "".join(p.get("text", "") for p in parts)
             except (KeyError, IndexError):
-                return "⚠️ Không lấy được câu trả lời từ cấu trúc phản hồi của Gemini."
+                return "⚠️ Không lấy được câu trả lời từ phản hồi của Gemini."
         else:
+            # Vertex có thể trả về list thay vì dict khi lỗi
+            if isinstance(res_json, list) and res_json:
+                res_json = res_json[0]
             err_msg = res_json.get("error", {}).get("message", response.text)
             return f"❌ **Lỗi API Gemini ({response.status_code}):**\n\n`{err_msg}`"
 
@@ -440,7 +461,6 @@ if page == "🍽️ Order":
                     "Thành tiền": price * quantity,
                 }
 
-            st.success(f"Đã thêm {item} vào giỏ!")
             st.rerun()
 
     with col2:
@@ -483,8 +503,8 @@ if page == "🍽️ Order":
                                 "created_at": now_time,
                                 "table_name": row["Bàn"],
                                 "item_name": row["Tên món"],
-                                "quantity": row["Số lượng"],
-                                "total_price": row["Thành tiền"],
+                                "quantity": int(row["Số lượng"]),
+                                "total_price": float(row["Thành tiền"]),
                             }
                             for row in st.session_state.order_dict.values()
                         ]
@@ -499,8 +519,8 @@ if page == "🍽️ Order":
                                 index=False
                             )
 
-                            st.success("✅ Thanh toán thành công!")
                             st.session_state.order_dict = {}
+                            st.success("✅ Thanh toán thành công!")
                             st.rerun()
 
                         except Exception as e:
@@ -529,7 +549,6 @@ elif page == "🔑 Admin":
             if login_submitted:
                 if password == ADMIN_PASSWORD:
                     st.session_state.admin_logged_in = True
-                    st.success("Đăng nhập thành công!")
                     st.rerun()
                 else:
                     st.error("❌ Mật khẩu không chính xác!")
@@ -577,7 +596,7 @@ elif page == "🔑 Admin":
             with col_met1:
                 st.metric("💰 Tổng doanh thu", f"{tong_doanh_thu:,.0f} VNĐ")
             with col_met2:
-                st.metric("🍽️ Số lượng món đã phục vụ", f"{tong_mon} phần")
+                st.metric("🍽️ Số lượng món đã phục vụ", f"{int(tong_mon)} phần")
 
             st.markdown("---")
             st.subheader("📅 Doanh thu theo ngày")
@@ -617,11 +636,11 @@ elif page == "🔑 Admin":
 
             product_qty = df_anal.groupby("Tên món")["Số lượng"].sum()
             best_seller = product_qty.idxmax()
-            best_seller_qty = product_qty.max()
+            best_seller_qty = int(product_qty.max())
 
             hourly_sales = df_anal.groupby("Giờ")["Số lượng"].sum()
-            best_hour = hourly_sales.idxmax()
-            best_hour_qty = hourly_sales.max()
+            best_hour = int(hourly_sales.idxmax())
+            best_hour_qty = int(hourly_sales.max())
 
             monthly_rev = df_anal.groupby("Tháng-Năm")["Thành tiền"].sum()
             best_month = monthly_rev.idxmax()
@@ -680,9 +699,9 @@ elif page == "🤖 Gemini AI":
 
     with col_status2:
         if GEMINI_API_KEY and len(GEMINI_API_KEY.strip()) > 10:
-            st.success("🟢 Gemini Token/Key: ĐÃ CẤU HÌNH")
+            st.success("🟢 Gemini Key: ĐÃ CẤU HÌNH")
         else:
-            st.error("🔴 Gemini Token/Key: CHƯA CẤU HÌNH")
+            st.error("🔴 Gemini Key: CHƯA CẤU HÌNH")
 
     st.markdown("---")
 
@@ -699,8 +718,6 @@ elif page == "🤖 Gemini AI":
     user_question = st.chat_input("Hỏi Gemini về dữ liệu nhà hàng...")
 
     if user_question:
-        st.session_state.chat_history.append({"role": "user", "content": user_question})
-
         with st.chat_message("user"):
             st.markdown(user_question)
 
@@ -709,4 +726,5 @@ elif page == "🤖 Gemini AI":
                 answer = ask_gemini(user_question)
             st.markdown(answer)
 
+        st.session_state.chat_history.append({"role": "user", "content": user_question})
         st.session_state.chat_history.append({"role": "assistant", "content": answer})
