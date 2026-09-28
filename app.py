@@ -1,4 +1,5 @@
 import pandas as pd
+import requests
 import streamlit as st
 from datetime import datetime
 from sqlalchemy import create_engine, text
@@ -7,7 +8,6 @@ from sqlalchemy.engine import URL
 # ============================================================
 # 1. CẤU HÌNH HỆ THỐNG
 # ============================================================
-# Dán API Key chuẩn (bắt đầu bằng AIzaSy...) vào đây
 GEMINI_API_KEY = "AQ.Ab8RN6IYGUF6ILXgVKq9iGusriHG8T8HmUSNWVKoLtuTQ-7RKw"
 
 AIVEN_HOST = "mysql-3a5ef2bc-binhquytoc.a.aivencloud.com"
@@ -18,28 +18,11 @@ AIVEN_DATABASE = "defaultdb"
 
 ADMIN_PASSWORD = "123456"
 
-# Sử dụng model Gemini 2.5 Flash
 GEMINI_MODEL = "gemini-2.5-flash"
 
 
 # ============================================================
-# 2. IMPORT GEMINI SDK
-# ============================================================
-genai_type = None
-
-try:
-    from google import genai
-    genai_type = "new"
-except ImportError:
-    try:
-        import google.generativeai as legacy_genai
-        genai_type = "legacy"
-    except ImportError:
-        genai_type = None
-
-
-# ============================================================
-# 3. CẤU HÌNH STREAMLIT
+# 2. CẤU HÌNH STREAMLIT
 # ============================================================
 st.set_page_config(
     page_title="Order Nhà Hàng + Gemini AI",
@@ -49,7 +32,7 @@ st.set_page_config(
 
 
 # ============================================================
-# 4. KẾT NỐI AIVEN MYSQL
+# 3. KẾT NỐI AIVEN MYSQL
 # ============================================================
 DATABASE_URL = URL.create(
     drivername="mysql+pymysql",
@@ -102,7 +85,7 @@ except Exception as e:
 
 
 # ============================================================
-# 5. MENU NHÀ HÀNG
+# 4. MENU NHÀ HÀNG
 # ============================================================
 menu = {
     "Đồ ăn": {
@@ -130,7 +113,7 @@ menu = {
 
 
 # ============================================================
-# 6. SESSION STATE
+# 5. SESSION STATE
 # ============================================================
 if "order_dict" not in st.session_state:
     st.session_state.order_dict = {}
@@ -143,7 +126,7 @@ if "chat_history" not in st.session_state:
 
 
 # ============================================================
-# 7. ĐỌC LỊCH SỬ GIAO DỊCH
+# 6. ĐỌC LỊCH SỬ GIAO DỊCH
 # ============================================================
 def load_history_from_db(show_error=True):
     if not db_connected:
@@ -188,7 +171,7 @@ def load_history_from_db(show_error=True):
 
 
 # ============================================================
-# 8. TẠO DỮ LIỆU MYSQL CHO GEMINI
+# 7. TẠO DỮ LIỆU MYSQL CHO GEMINI
 # ============================================================
 def get_database_context():
     if not db_connected:
@@ -291,24 +274,13 @@ def get_database_context():
 
 
 # ============================================================
-# 9. GEMINI CLIENT & HÀM GỌI API
+# 8. GỌI GEMINI API CHO ĐỊNH DẠNG AQ... KEY (Sử dụng REST Header)
 # ============================================================
 def ask_gemini(user_question):
     api_key = GEMINI_API_KEY.strip() if GEMINI_API_KEY else ""
 
-    if not api_key or api_key.startswith("DÁN_API_KEY"):
-        return "❌ Bạn chưa nhập Gemini API Key vào biến `GEMINI_API_KEY` ở đầu file `app.py`."
-
-    if not api_key.startswith("AIzaSy"):
-        return (
-            "⚠️ **API Key sai định dạng!**\n\n"
-            "Mã bạn vừa nhập (`AQ...`) là OAuth Token, không phải Gemini API Key.\n"
-            "Vui lòng vào [Google AI Studio](https://aistudio.google.com/app/apikey) "
-            "bấm **Create API Key** để lấy mã chuẩn bắt đầu bằng **`AIzaSy...`**."
-        )
-
-    if genai_type is None:
-        return "❌ Thư viện Google GenAI chưa được cài đặt. Hãy chạy: `pip install google-genai`"
+    if not api_key:
+        return "❌ Chưa cấu hình GEMINI_API_KEY ở đầu file."
 
     database_context = get_database_context()
 
@@ -318,13 +290,13 @@ def ask_gemini(user_question):
         role = "Người dùng" if message["role"] == "user" else "Gemini"
         history_text += f"\n{role}: {message['content']}\n"
 
-    system_instruction = """
-Bạn là trợ lý AI cho hệ thống quản lý nhà hàng.
-QUY TẮC:
-1. Trả lời bằng tiếng Việt ngắn gọn, rõ ràng.
-2. Dựa vào DỮ LIỆU THỰC TẾ từ database MySQL được cung cấp để phân tích.
-3. Định dạng tiền tệ theo VNĐ (VD: 150.000 VNĐ).
-"""
+    system_instruction = (
+        "Bạn là trợ lý AI cho hệ thống quản lý nhà hàng.\n"
+        "QUY TẮC:\n"
+        "1. Trả lời bằng tiếng Việt ngắn gọn, rõ ràng.\n"
+        "2. Dựa vào DỮ LIỆU THỰC TẾ từ database MySQL để trả lời chính xác số liệu.\n"
+        "3. Định dạng số tiền VNĐ rõ ràng (VD: 150.000 VNĐ).\n"
+    )
 
     prompt = f"""
 {system_instruction}
@@ -339,32 +311,41 @@ QUY TẮC:
 {user_question}
 """
 
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": api_key
+    }
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {"text": prompt}
+                ]
+            }
+        ]
+    }
+
     try:
-        if genai_type == "new":
-            client = genai.Client(api_key=api_key)
-            response = client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=prompt
-            )
-            return response.text
-        elif genai_type == "legacy":
-            legacy_genai.configure(api_key=api_key)
-            model = legacy_genai.GenerativeModel("gemini-1.5-flash")
-            response = model.generate_content(prompt)
-            return response.text
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        res_json = response.json()
+
+        if response.status_code == 200:
+            try:
+                answer = res_json["candidates"][0]["content"]["parts"][0]["text"]
+                return answer
+            except (KeyError, IndexError):
+                return "⚠️ Không lấy được câu trả lời từ cấu trúc phản hồi của Gemini."
+        else:
+            err_msg = res_json.get("error", {}).get("message", response.text)
+            return f"❌ **Lỗi API Gemini ({response.status_code}):**\n\n`{err_msg}`"
 
     except Exception as e:
-        err_str = str(e)
-        if "401" in err_str or "UNAUTHENTICATED" in err_str:
-            return (
-                "❌ **Lỗi 401 UNAUTHENTICATED:** API Key không hợp lệ.\n\n"
-                "Hãy kiểm tra xem API Key lấy từ Google AI Studio đã được kích hoạt chưa."
-            )
-        return f"❌ Lỗi khi kết nối Gemini API: `{err_str}`"
+        return f"❌ Lỗi kết nối HTTP tới Gemini API:\n\n`{str(e)}`"
 
 
 # ============================================================
-# 10. SIDEBAR
+# 9. SIDEBAR
 # ============================================================
 st.sidebar.title("🍽️ QUẢN LÝ NHÀ HÀNG")
 
@@ -386,7 +367,7 @@ else:
 
 
 # ============================================================
-# 11. TRANG ORDER
+# 10. TRANG ORDER
 # ============================================================
 if page == "🍽️ Order":
 
@@ -523,7 +504,7 @@ if page == "🍽️ Order":
 
 
 # ============================================================
-# 12. TRANG ADMIN
+# 11. TRANG ADMIN
 # ============================================================
 elif page == "🔑 Admin":
 
@@ -672,7 +653,7 @@ elif page == "🔑 Admin":
 
 
 # ============================================================
-# 13. TRANG GEMINI AI
+# 12. TRANG GEMINI AI
 # ============================================================
 elif page == "🤖 Gemini AI":
 
@@ -687,10 +668,10 @@ elif page == "🤖 Gemini AI":
             st.error("🔴 Aiven MySQL: CHƯA KẾT NỐI")
 
     with col_status2:
-        if GEMINI_API_KEY and GEMINI_API_KEY.strip().startswith("AIzaSy"):
-            st.success("🟢 Gemini API Key: ĐÃ CẤU HÌNH CỤ THỂ")
+        if GEMINI_API_KEY and len(GEMINI_API_KEY.strip()) > 10:
+            st.success("🟢 Gemini API Key: ĐÃ CẤU HÌNH")
         else:
-            st.error("🔴 Gemini API Key: CHƯA ĐÚNG ĐỊNH DẠNG (Cần mã AIzaSy...)")
+            st.error("🔴 Gemini API Key: CHƯA CẤU HÌNH")
 
     st.markdown("---")
 
