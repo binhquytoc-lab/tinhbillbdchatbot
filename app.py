@@ -9,7 +9,7 @@ from google.genai import types
 # ============================================================
 # 1. CẤU HÌNH HỆ THỐNG
 # ============================================================
-GEMINI_API_KEY = "AIzaSyDP3TCevhiu4Sl0REhFJS48qF_o46shq0E"
+GEMINI_API_KEY = "AQ.Ab8RN6J86Zv9ntD5T8c1QFMOqPXSC5q-TEJNMMSFJSmgoXZasw"
 GEMINI_MODEL = "gemini-1.5-flash"
 APP_VERSION = "v4-genai-sdk"
 
@@ -286,23 +286,37 @@ def ask_gemini(user_question):
     if not GEMINI_API_KEY:
         return "❌ Chưa cấu hình GEMINI_API_KEY ở đầu file."
 
-    database_context = get_database_context()
+    try:
+        from google import genai
+        from google.genai import types
 
-    previous_messages = st.session_state.chat_history[-10:]
-    history_text = ""
-    for message in previous_messages:
-        role = "Người dùng" if message["role"] == "user" else "Gemini"
-        history_text += f"\n{role}: {message['content']}\n"
+        # Nếu Key bắt đầu bằng AQ... -> Truyền dưới dạng credentials / token hoặc Vertex AI
+        if GEMINI_API_KEY.startswith("AQ"):
+            # Khởi tạo Client hỗ trợ Express Token / Access Token
+            client = genai.Client(
+                credentials=types.Credentials(access_token=GEMINI_API_KEY)
+            )
+        else:
+            # Key AIza... thông thường
+            client = genai.Client(api_key=GEMINI_API_KEY)
 
-    system_instruction = (
-        "Bạn là trợ lý AI cho hệ thống quản lý nhà hàng.\n"
-        "QUY TẮC:\n"
-        "1. Trả lời bằng tiếng Việt ngắn gọn, rõ ràng.\n"
-        "2. Dựa vào DỮ LIỆU THỰC TẾ từ database MySQL để trả lời chính xác số liệu.\n"
-        "3. Định dạng số tiền VNĐ rõ ràng (VD: 150.000 VNĐ).\n"
-    )
+        database_context = get_database_context()
 
-    prompt = f"""
+        previous_messages = st.session_state.chat_history[-10:]
+        history_text = ""
+        for message in previous_messages:
+            role = "Người dùng" if message["role"] == "user" else "Gemini"
+            history_text += f"\n{role}: {message['content']}\n"
+
+        system_instruction = (
+            "Bạn là trợ lý AI cho hệ thống quản lý nhà hàng.\n"
+            "QUY TẮC:\n"
+            "1. Trả lời bằng tiếng Việt ngắn gọn, rõ ràng.\n"
+            "2. Dựa vào DỮ LIỆU THỰC TẾ từ database MySQL để trả lời chính xác số liệu.\n"
+            "3. Định dạng số tiền VNĐ rõ ràng (VD: 150.000 VNĐ).\n"
+        )
+
+        prompt = f"""
 === DỮ LIỆU THỰC TẾ TỪ AIVEN MYSQL ===
 {database_context}
 
@@ -313,7 +327,6 @@ def ask_gemini(user_question):
 {user_question}
 """
 
-    try:
         response = client.models.generate_content(
             model=GEMINI_MODEL,
             contents=prompt,
@@ -324,7 +337,6 @@ def ask_gemini(user_question):
         return response.text
     except Exception as e:
         return f"❌ **Lỗi gọi Gemini API:** `{e}`"
-
 
 # ============================================================
 # 9. SIDEBAR
