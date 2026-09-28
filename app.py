@@ -13,7 +13,7 @@ from sqlalchemy.engine import URL
 # Google hỗ trợ truyền API key trực tiếp vào genai.Client(...),
 # nhưng khuyến cáo giữ key bí mật.
 
-GEMINI_API_KEY = "AQ.Ab8RN6IK3N0BCR3-AFm784alHWy-yWNU1Ut9qX3TW2dn2dz5Vg" # SỬA API KEY
+GEMINI_API_KEY = "AQ.Ab8RN6ISf86scOBuWCfgpmNxJcLA4yuVvZ1_aXZg6ZkjfOfZ4Q" # SỬA API KEY
 
 AIVEN_HOST = "mysql-3a5ef2bc-binhquytoc.a.aivencloud.com" # SỬA HOST
 AIVEN_PORT = 14483 # SỬA PORT
