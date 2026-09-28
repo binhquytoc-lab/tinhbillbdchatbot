@@ -9,7 +9,7 @@ from sqlalchemy.engine import URL
 # ============================================================
 # Hãy dán chuỗi Key gsk_... của bạn vào đây
 GROQ_API_KEY = "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"
-GROQ_MODEL = "llama-3.1-8b-instant"
+GROQ_MODEL = "mixtral-8x7b-32768"
 APP_VERSION = "v6-groq-api"
 
 AIVEN_HOST = "mysql-3a5ef2bc-binhquytoc.a.aivencloud.com"
