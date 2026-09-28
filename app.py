@@ -277,7 +277,8 @@ def get_database_context():
 
 # ============================================================
 # ============================================================
-# 8. GỌI GEMINI API (ĐÃ SỬA CHUẨN CHO KEY AQ... & AIza...)
+# ============================================================
+# 8. GỌI GEMINI API (CÁCH SỬA CHO KEY FORMAT AQ...)
 # ============================================================
 def ask_gemini(user_question):
     token = GEMINI_API_KEY.strip() if GEMINI_API_KEY else ""
@@ -319,9 +320,14 @@ def ask_gemini(user_question):
         ],
     }
 
-    # Endpoint v1beta hỗ trợ trực tiếp API Key qua URL parameter
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={token}"
-    headers = {"Content-Type": "application/json"}
+    # 1. URL bỏ tham số ?key=... ở cuối
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+    
+    # 2. Truyền API Key qua Header x-goog-api-key (bắt buộc đối với key AQ...)
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": token
+    }
 
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=60)
