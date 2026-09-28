@@ -276,7 +276,8 @@ def get_database_context():
 
 
 # ============================================================
-# 8. GỌI GEMINI API
+# ============================================================
+# 8. GỌI GEMINI API (ĐÃ SỬA CHUẨN CHO KEY AQ... & AIza...)
 # ============================================================
 def ask_gemini(user_question):
     token = GEMINI_API_KEY.strip() if GEMINI_API_KEY else ""
@@ -318,7 +319,7 @@ def ask_gemini(user_question):
         ],
     }
 
-    # URL Endpoint chuẩn cho Gemini API với API Key
+    # Endpoint v1beta hỗ trợ trực tiếp API Key qua URL parameter
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={token}"
     headers = {"Content-Type": "application/json"}
 
@@ -338,7 +339,6 @@ def ask_gemini(user_question):
 
     except Exception as e:
         return f"❌ **Lỗi kết nối:** `{e}`"
-
 # ============================================================
 # 9. SIDEBAR
 # ============================================================
