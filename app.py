@@ -7,10 +7,9 @@ from sqlalchemy.engine import URL
 # ============================================================
 # 1. CẤU HÌNH HỆ THỐNG
 # ============================================================
-# Hãy dán chuỗi Key gsk_... của bạn vào đây
+# Hãy thay chuỗi gsk_... bằng API Key thực tế từ Groq Console (https://console.groq.com/keys)
 GROQ_API_KEY = "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"
-GROQ_MODEL = "gemma2-9b-it"
-APP_VERSION = "v6-groq-api"
+APP_VERSION = "v7-groq-auto-model"
 
 AIVEN_HOST = "mysql-3a5ef2bc-binhquytoc.a.aivencloud.com"
 AIVEN_PORT = 14483
@@ -276,8 +275,35 @@ def get_database_context():
 
 
 # ============================================================
-# 8. GỌI GROQ AI API
+# 8. XỬ LÝ GROQ AI (TỰ ĐỘNG LỰA CHỌN MODEL HOẠT ĐỘNG)
 # ============================================================
+def get_active_groq_model(client):
+    """Lấy danh sách các model đang hoạt động trên Groq và chọn model tối ưu nhất"""
+    try:
+        models = client.models.list()
+        active_ids = [m.id for m in models.data]
+        
+        # Danh sách ưu tiên theo thứ tự năng lực xử lý
+        priority_list = [
+            "llama-3.3-70b-versatile",
+            "llama-3.3-70b-specdec",
+            "llama-3.1-8b-instant",
+            "deepseek-r1-distill-llama-70b",
+            "qwen-2.5-32b",
+            "llama3-70b-8192",
+            "llama3-8b-8192"
+        ]
+        
+        for preferred in priority_list:
+            if preferred in active_ids:
+                return preferred
+                
+        # Nếu các model trên đều không có, lấy model khả dụng bất kỳ
+        return active_ids[0] if active_ids else "llama-3.1-8b-instant"
+    except Exception:
+        return "llama-3.1-8b-instant"
+
+
 def ask_groq(user_question):
     if not GROQ_API_KEY or GROQ_API_KEY == "gsk_...":
         return "❌ Chưa cấu hình GROQ_API_KEY hợp lệ ở đầu file."
@@ -285,6 +311,10 @@ def ask_groq(user_question):
     try:
         from groq import Groq
         client = Groq(api_key=GROQ_API_KEY)
+        
+        # Tự động lấy tên model đang hoạt động
+        selected_model = get_active_groq_model(client)
+        
         database_context = get_database_context()
 
         previous_messages = st.session_state.chat_history[-10:]
@@ -317,7 +347,7 @@ def ask_groq(user_question):
                 {"role": "system", "content": system_instruction},
                 {"role": "user", "content": prompt}
             ],
-            model=GROQ_MODEL,
+            model=selected_model,
         )
         return chat_completion.choices[0].message.content
     except Exception as e:
@@ -659,17 +689,18 @@ elif page == "🤖 Groq AI":
         st.write(f"Phiên bản code: **{APP_VERSION}**")
         masked_key = f"{GROQ_API_KEY[:6]}...{GROQ_API_KEY[-4:]}" if len(GROQ_API_KEY) > 10 else "Chưa điền"
         st.write(f"Key đang dùng: `{masked_key}`")
-        st.write(f"Model cấu hình: `{GROQ_MODEL}`")
 
         if st.button("▶️ Chạy kiểm tra"):
             try:
                 from groq import Groq
                 test_client = Groq(api_key=GROQ_API_KEY)
+                active_model = get_active_groq_model(test_client)
+                
                 test_res = test_client.chat.completions.create(
                     messages=[{"role": "user", "content": "Xin chào"}],
-                    model=GROQ_MODEL,
+                    model=active_model,
                 )
-                st.success("🟢 Kết nối thành công!")
+                st.success(f"🟢 Kết nối thành công! Tự động sử dụng mô hình `{active_model}`")
                 st.write(f"Phản hồi thử nghiệm: `{test_res.choices[0].message.content}`")
             except Exception as e:
                 st.error(f"🔴 Lỗi chẩn đoán Groq SDK: {e}")
