@@ -8,7 +8,7 @@ from sqlalchemy.engine import URL
 # 1. CẤU HÌNH HỆ THỐNG
 # ============================================================
 GROQ_API_KEY = "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"
-APP_VERSION = "v11-groq-full-admin-context-fix"
+APP_VERSION = "v12-groq-dynamic-model-fix"
 
 AIVEN_HOST = "mysql-3a5ef2bc-binhquytoc.a.aivencloud.com"
 AIVEN_PORT = 14483
@@ -237,37 +237,43 @@ def get_database_context():
 
 
 # ============================================================
-# 8. XỬ LÝ GROQ AI (LỌC MODEL VÀ TRẢ LỜI CHÍNH XÁC)
+# 8. XỬ LÝ GROQ AI (TỰ ĐỘNG LỌC VÀ CHỌN MODEL TỐI ƯU)
 # ============================================================
 def get_active_groq_model(client):
-    """Lựa chọn các model Chat Tiếng Việt mạnh nhất, loại bỏ allam / whisper / third-party"""
+    """
+    Lấy danh sách các model thực tế khả dụng từ API key để tránh lỗi 404 (model_not_found).
+    """
     try:
         models = client.models.list()
+        available_ids = [m.id for m in models.data]
         
-        # Thứ tự ưu tiên model xử lý Tiếng Việt & Phân tích số liệu cực tốt
+        # Thứ tự ưu tiên chọn model chất lượng cao nhất cho Tiếng Việt & Số liệu
         priority_list = [
             "llama-3.3-70b-versatile",
             "llama-3.1-8b-instant",
-            "qwen-2.5-32b",
-            "mixtral-8x7b-32768"
+            "llama3-70b-8192",
+            "llama3-8b-8192",
+            "mixtral-8x7b-32768",
+            "gemma2-9b-it"
         ]
-        
-        available_ids = [m.id for m in models.data]
         
         for preferred in priority_list:
             if preferred in available_ids:
                 return preferred
                 
-        # Lọc loại bỏ hoàn toàn các model 'allam', 'whisper', 'guard', 'vision' hoặc 3rd party
+        # Nếu không trúng model ưu tiên, lọc bỏ model Whisper, Vision, Guard, Allam
         safe_chat_models = [
             m.id for m in models.data 
             if "/" not in m.id 
             and not any(excluded in m.id.lower() for excluded in ["allam", "whisper", "guard", "vision", "transcribe", "prompt-guard"])
         ]
         
-        return safe_chat_models[0] if safe_chat_models else "llama-3.3-70b-versatile"
+        if safe_chat_models:
+            return safe_chat_models[0]
+            
+        return available_ids[0] if available_ids else "llama-3.1-8b-instant"
     except Exception:
-        return "llama-3.3-70b-versatile"
+        return "llama-3.1-8b-instant"
 
 
 def ask_groq(user_question):
@@ -313,7 +319,7 @@ def ask_groq(user_question):
             ],
             model=selected_model,
             max_tokens=1000,
-            temperature=0.1  # Giảm bớt sáng tạo để trả lời chính xác số liệu
+            temperature=0.1
         )
         return chat_completion.choices[0].message.content
     except Exception as e:
@@ -667,7 +673,7 @@ elif page == "🤖 Groq AI":
                     model=active_model,
                     max_tokens=100
                 )
-                st.success(f"🟢 Kết nối thành công! Mô hình sử dụng: `{active_model}`")
+                st.success(f"🟢 Kết nối thành công! Mô hình đang hoạt động: `{active_model}`")
                 st.write(f"Phản hồi thử nghiệm: `{test_res.choices[0].message.content}`")
             except Exception as e:
                 st.error(f"🔴 Lỗi chẩn đoán Groq SDK: {e}")
