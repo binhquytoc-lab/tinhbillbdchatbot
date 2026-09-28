@@ -3,15 +3,14 @@ import streamlit as st
 from datetime import datetime
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL
-from google import genai
-from google.genai import types
 
 # ============================================================
 # 1. CẤU HÌNH HỆ THỐNG
 # ============================================================
-GEMINI_API_KEY = "AQ.Ab8RN6J86Zv9ntD5T8c1QFMOqPXSC5q-TEJNMMSFJSmgoXZasw"
-GEMINI_MODEL = "gemini-1.5-flash"
-APP_VERSION = "v4-genai-sdk"
+# Hãy dán chuỗi Key gsk_... của bạn vào đây
+GROQ_API_KEY = "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"
+GROQ_MODEL = "llama-3.3-70b-versatile"
+APP_VERSION = "v6-groq-api"
 
 AIVEN_HOST = "mysql-3a5ef2bc-binhquytoc.a.aivencloud.com"
 AIVEN_PORT = 14483
@@ -21,15 +20,12 @@ AIVEN_DATABASE = "defaultdb"
 
 ADMIN_PASSWORD = "123456"
 
-# Khởi tạo Client Gemini bằng SDK chính thức
-client = genai.Client(api_key=GEMINI_API_KEY)
-
 
 # ============================================================
 # 2. CẤU HÌNH STREAMLIT
 # ============================================================
 st.set_page_config(
-    page_title="Order Nhà Hàng + Gemini AI",
+    page_title="Order Nhà Hàng + Groq AI",
     page_icon="🍽️",
     layout="wide"
 )
@@ -177,7 +173,7 @@ def load_history_from_db(show_error=True):
 
 
 # ============================================================
-# 7. TẠO DỮ LIỆU MYSQL CHO GEMINI
+# 7. TẠO DỮ LIỆU MYSQL CHO GROQ AI
 # ============================================================
 def get_database_context():
     if not db_connected:
@@ -280,32 +276,21 @@ def get_database_context():
 
 
 # ============================================================
-# 8. GỌI GEMINI API VIA GOOGLE-GENAI SDK
+# 8. GỌI GROQ AI API
 # ============================================================
-def ask_gemini(user_question):
-    if not GEMINI_API_KEY:
-        return "❌ Chưa cấu hình GEMINI_API_KEY ở đầu file."
+def ask_groq(user_question):
+    if not GROQ_API_KEY or GROQ_API_KEY == "gsk_...":
+        return "❌ Chưa cấu hình GROQ_API_KEY hợp lệ ở đầu file."
 
     try:
-        from google import genai
-        from google.genai import types
-
-        # Nếu Key bắt đầu bằng AQ... -> Truyền dưới dạng credentials / token hoặc Vertex AI
-        if GEMINI_API_KEY.startswith("AQ"):
-            # Khởi tạo Client hỗ trợ Express Token / Access Token
-            client = genai.Client(
-                credentials=types.Credentials(access_token=GEMINI_API_KEY)
-            )
-        else:
-            # Key AIza... thông thường
-            client = genai.Client(api_key=GEMINI_API_KEY)
-
+        from groq import Groq
+        client = Groq(api_key=GROQ_API_KEY)
         database_context = get_database_context()
 
         previous_messages = st.session_state.chat_history[-10:]
         history_text = ""
         for message in previous_messages:
-            role = "Người dùng" if message["role"] == "user" else "Gemini"
+            role = "Người dùng" if message["role"] == "user" else "AI"
             history_text += f"\n{role}: {message['content']}\n"
 
         system_instruction = (
@@ -327,16 +312,17 @@ def ask_gemini(user_question):
 {user_question}
 """
 
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-            )
+        chat_completion = client.chat.completions.create(
+            messages=[
+                {"role": "system", "content": system_instruction},
+                {"role": "user", "content": prompt}
+            ],
+            model=GROQ_MODEL,
         )
-        return response.text
+        return chat_completion.choices[0].message.content
     except Exception as e:
-        return f"❌ **Lỗi gọi Gemini API:** `{e}`"
+        return f"❌ **Lỗi gọi Groq API:** `{e}`"
+
 
 # ============================================================
 # 9. SIDEBAR
@@ -348,7 +334,7 @@ page = st.sidebar.radio(
     [
         "🍽️ Order",
         "🔑 Admin",
-        "🤖 Gemini AI"
+        "🤖 Groq AI"
     ]
 )
 
@@ -647,12 +633,12 @@ elif page == "🔑 Admin":
 
 
 # ============================================================
-# 12. TRANG GEMINI AI
+# 12. TRANG GROQ AI
 # ============================================================
-elif page == "🤖 Gemini AI":
+elif page == "🤖 Groq AI":
 
-    st.title("🤖 Gemini AI - Trợ lý dữ liệu nhà hàng")
-    st.caption("Gemini đọc dữ liệu từ Aiven MySQL và hỗ trợ trả lời phân tích.")
+    st.title("🤖 Groq AI - Trợ lý dữ liệu nhà hàng")
+    st.caption("Groq AI đọc dữ liệu từ Aiven MySQL và hỗ trợ trả lời phân tích siêu tốc.")
 
     col_status1, col_status2 = st.columns(2)
     with col_status1:
@@ -662,28 +648,31 @@ elif page == "🤖 Gemini AI":
             st.error("🔴 Aiven MySQL: CHƯA KẾT NỐI")
 
     with col_status2:
-        if GEMINI_API_KEY and len(GEMINI_API_KEY.strip()) > 10:
-            st.success("🟢 Gemini Key: ĐÃ CẤU HÌNH")
+        if GROQ_API_KEY and GROQ_API_KEY.startswith("gsk_"):
+            st.success("🟢 Groq Key: ĐÃ CẤU HÌNH")
         else:
-            st.error("🔴 Gemini Key: CHƯA CẤU HÌNH")
+            st.error("🔴 Groq Key: CHƯA CẤU HÌNH (Cần Key gsk_...)")
 
     st.markdown("---")
 
-    with st.expander("🛠️ Chẩn đoán kết nối Gemini SDK"):
+    with st.expander("🛠️ Chẩn đoán kết nối Groq SDK"):
         st.write(f"Phiên bản code: **{APP_VERSION}**")
-        st.write(f"Key đang dùng: `{GEMINI_API_KEY[:6]}...{GEMINI_API_KEY[-4:]}`")
-        st.write(f"Model cấu hình: `{GEMINI_MODEL}`")
+        masked_key = f"{GROQ_API_KEY[:6]}...{GROQ_API_KEY[-4:]}" if len(GROQ_API_KEY) > 10 else "Chưa điền"
+        st.write(f"Key đang dùng: `{masked_key}`")
+        st.write(f"Model cấu hình: `{GROQ_MODEL}`")
 
         if st.button("▶️ Chạy kiểm tra"):
             try:
-                test_res = client.models.generate_content(
-                    model=GEMINI_MODEL,
-                    contents="Xin chào Gemini"
+                from groq import Groq
+                test_client = Groq(api_key=GROQ_API_KEY)
+                test_res = test_client.chat.completions.create(
+                    messages=[{"role": "user", "content": "Xin chào"}],
+                    model=GROQ_MODEL,
                 )
                 st.success("🟢 Kết nối thành công!")
-                st.write(f"Phản hồi thử nghiệm: `{test_res.text}`")
+                st.write(f"Phản hồi thử nghiệm: `{test_res.choices[0].message.content}`")
             except Exception as e:
-                st.error(f"🔴 Lỗi chẩn đoán SDK: {e}")
+                st.error(f"🔴 Lỗi chẩn đoán Groq SDK: {e}")
 
     st.markdown("---")
 
@@ -697,15 +686,15 @@ elif page == "🤖 Gemini AI":
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    user_question = st.chat_input("Hỏi Gemini về dữ liệu nhà hàng...")
+    user_question = st.chat_input("Hỏi AI về dữ liệu nhà hàng...")
 
     if user_question:
         with st.chat_message("user"):
             st.markdown(user_question)
 
         with st.chat_message("assistant"):
-            with st.spinner("🔎 Đang đọc dữ liệu MySQL và hỏi Gemini..."):
-                answer = ask_gemini(user_question)
+            with st.spinner("🔎 Đang đọc dữ liệu MySQL và hỏi Groq AI..."):
+                answer = ask_groq(user_question)
             st.markdown(answer)
 
         st.session_state.chat_history.append({"role": "user", "content": user_question})
