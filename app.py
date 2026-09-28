@@ -7,9 +7,8 @@ from sqlalchemy.engine import URL
 # ============================================================
 # 1. CẤU HÌNH HỆ THỐNG
 # ============================================================
-# Thay chuỗi gsk_... bằng API Key thực tế từ Groq Console (https://console.groq.com/keys)
 GROQ_API_KEY = "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"
-APP_VERSION = "v10-groq-third-party-filter-fix"
+APP_VERSION = "v11-groq-full-admin-context-fix"
 
 AIVEN_HOST = "mysql-3a5ef2bc-binhquytoc.a.aivencloud.com"
 AIVEN_PORT = 14483
@@ -172,58 +171,63 @@ def load_history_from_db(show_error=True):
 
 
 # ============================================================
-# 7. TẠO DỮ LIỆU MYSQL GỌN CHO GROQ AI (TIẾT KIỆM TOKEN)
+# 7. TRUYỀN TOÀN BỘ SỐ LIỆU TRANG ADMIN CHO GROQ AI
 # ============================================================
 def get_database_context():
-    if not db_connected:
-        return "DATABASE_STATUS: MySQL chưa kết nối được."
+    df = load_history_from_db(show_error=False)
+    
+    if df.empty:
+        return "DATABASE_STATUS: Hiện chưa có giao dịch nào được ghi nhận trong cơ sở dữ liệu."
 
     try:
-        engine = get_db_engine()
+        # 1. Tổng quan Doanh thu & Sản lượng
+        tong_doanh_thu = df["Thành tiền"].sum()
+        tong_mon_ban = df["Số lượng"].sum()
+        tong_don_hang = len(df)
 
-        summary_sql = text("""
-            SELECT
-                COUNT(*) AS total_records,
-                COALESCE(SUM(quantity), 0) AS total_quantity,
-                COALESCE(SUM(total_price), 0) AS total_revenue
-            FROM orders
-        """)
+        # 2. Thống kê theo Tất cả sản phẩm
+        df_product = df.groupby("Tên món").agg(
+            So_Luong_Ban=("Số lượng", "sum"),
+            Doanh_Thu_VND=("Thành tiền", "sum")
+        ).reset_index().sort_values(by="So_Luong_Ban", ascending=False)
 
-        product_sql = text("""
-            SELECT
-                item_name,
-                SUM(quantity) AS quantity,
-                SUM(total_price) AS revenue
-            FROM orders
-            GROUP BY item_name
-            ORDER BY quantity DESC
-            LIMIT 10
-        """)
+        # 3. Thống kê theo Ngày
+        df_copy = df.copy()
+        df_copy["Thời gian"] = pd.to_datetime(df_copy["Thời gian"])
+        df_copy["Ngày"] = df_copy["Thời gian"].dt.strftime("%Y-%m-%d")
+        df_daily = df_copy.groupby("Ngày")["Thành tiền"].sum().reset_index()
 
-        recent_sql = text("""
-            SELECT
-                created_at,
-                table_name,
-                item_name,
-                quantity,
-                total_price
-            FROM orders
-            ORDER BY created_at DESC
-            LIMIT 15
-        """)
+        # 4. Thống kê theo Tháng
+        df_copy["Tháng-Năm"] = df_copy["Thời gian"].dt.strftime("%m/%Y")
+        df_monthly = df_copy.groupby("Tháng-Năm")["Thành tiền"].sum().reset_index()
 
-        with engine.connect() as conn:
-            summary = pd.read_sql(summary_sql, conn)
-            products = pd.read_sql(product_sql, conn)
-            recent = pd.read_sql(recent_sql, conn)
+        # 5. Thống kê theo Khung giờ
+        df_copy["Giờ"] = df_copy["Thời gian"].dt.hour
+        df_hourly = df_copy.groupby("Giờ")["Số lượng"].sum().reset_index()
+
+        # 6. Top 20 giao dịch mới nhất
+        recent_df = df[["ID", "Thời gian", "Bàn", "Tên món", "Số lượng", "Thành tiền"]].head(20)
 
         parts = [
-            "=== TỔNG QUAN DATABASE ===",
-            summary.to_string(index=False),
-            "\n=== MÓN BÁN CHẠY NHẤT (TOP 10) ===",
-            products.to_string(index=False),
-            "\n=== 15 GIAO DỊCH GẦN NHẤT ===",
-            recent.to_string(index=False),
+            "=== 1. TỔNG QUAN HỆ THỐNG TRANG ADMIN ===",
+            f"- Tổng doanh thu toàn hệ thống: {tong_doanh_thu:,.0f} VNĐ",
+            f"- Tổng số món đã phục vụ: {tong_mon_ban} phần",
+            f"- Tổng số dòng hóa đơn giao dịch: {tong_don_hang}",
+            
+            "\n=== 2. DOANH THU & SỐ LƯỢNG CHI TIẾT TẤT CẢ CÁC MÓN ===",
+            df_product.to_string(index=False),
+
+            "\n=== 3. DOANH THU THEO CÁC NGÀY ===",
+            df_daily.to_string(index=False),
+
+            "\n=== 4. DOANH THU THEO THÁNG ===",
+            df_monthly.to_string(index=False),
+
+            "\n=== 5. SỐ LƯỢNG MÓN BÁN THEO KHUNG GIỜ (0 - 23h) ===",
+            df_hourly.to_string(index=False),
+
+            "\n=== 6. CHI TIẾT 20 GIAO DỊCH MỚI NHẤT ===",
+            recent_df.to_string(index=False)
         ]
 
         return "\n".join(parts)
@@ -233,40 +237,37 @@ def get_database_context():
 
 
 # ============================================================
-# 8. XỬ LÝ GROQ AI (LỌC CHAT MODEL CHUẨN & TRÁNH THIRD-PARTY)
+# 8. XỬ LÝ GROQ AI (LỌC MODEL VÀ TRẢ LỜI CHÍNH XÁC)
 # ============================================================
 def get_active_groq_model(client):
-    """Chỉ chọn các model Chat chính chủ, miễn phí, không bị dính Terms/Rate Limit"""
+    """Lựa chọn các model Chat Tiếng Việt mạnh nhất, loại bỏ allam / whisper / third-party"""
     try:
         models = client.models.list()
         
-        # Danh sách ưu tiên các model text chat tiêu chuẩn miễn phí
+        # Thứ tự ưu tiên model xử lý Tiếng Việt & Phân tích số liệu cực tốt
         priority_list = [
-            "llama-3.1-8b-instant",
             "llama-3.3-70b-versatile",
+            "llama-3.1-8b-instant",
             "qwen-2.5-32b",
-            "llama3-8b-8192",
             "mixtral-8x7b-32768"
         ]
         
-        # Lấy danh sách ID từ API
         available_ids = [m.id for m in models.data]
         
-        # Kiểm tra xem có model ưu tiên nào đang online không
         for preferred in priority_list:
             if preferred in available_ids:
                 return preferred
                 
-        # Lọc an toàn: Bỏ whisper, guard, vision và bỏ các model thuộc 3rd party chứa '/'
+        # Lọc loại bỏ hoàn toàn các model 'allam', 'whisper', 'guard', 'vision' hoặc 3rd party
         safe_chat_models = [
             m.id for m in models.data 
-            if "/" not in m.id  # Loại bỏ các model kiểu 'canopylabs/...'
-            and not any(excluded in m.id.lower() for excluded in ["whisper", "guard", "vision", "transcribe", "prompt-guard"])
+            if "/" not in m.id 
+            and not any(excluded in m.id.lower() for excluded in ["allam", "whisper", "guard", "vision", "transcribe", "prompt-guard"])
         ]
         
-        return safe_chat_models[0] if safe_chat_models else "llama-3.1-8b-instant"
+        return safe_chat_models[0] if safe_chat_models else "llama-3.3-70b-versatile"
     except Exception:
-        return "llama-3.1-8b-instant"
+        return "llama-3.3-70b-versatile"
 
 
 def ask_groq(user_question):
@@ -280,7 +281,6 @@ def ask_groq(user_question):
         selected_model = get_active_groq_model(client)
         database_context = get_database_context()
 
-        # Giữ 4 câu gần nhất để tránh tràn ngữ cảnh
         previous_messages = st.session_state.chat_history[-4:]
         history_text = ""
         for message in previous_messages:
@@ -288,18 +288,21 @@ def ask_groq(user_question):
             history_text += f"\n{role}: {message['content']}\n"
 
         system_instruction = (
-            "Bạn là trợ lý AI cho nhà hàng. Trả lời bằng tiếng Việt ngắn gọn, rõ ràng, súc tích (dưới 300 từ).\n"
-            "Dựa vào dữ liệu thực tế từ database để trả lời chính xác số liệu tiền VNĐ."
+            "Bạn là Trợ lý Phân tích Dữ liệu Nhà hàng. Nhiệm vụ của bạn là trả lời chính xác 100% dựa vào dữ liệu thực tế từ Trang Admin được cung cấp bên dưới.\n"
+            "QUY TẮC BẮT BUỘC:\n"
+            "1. Chỉ sử dụng con số thực tế trong ngữ cảnh dữ liệu được cung cấp. Tuyệt đối không tự suy đoán hay bịa đặt số liệu.\n"
+            "2. Trả lời bằng Tiếng Việt rõ ràng, ngắn gọn, súc tích và chính xác định dạng tiền tệ (VNĐ).\n"
+            "3. Nếu câu hỏi yêu cầu món bán chạy nhất, doanh thu ngày/tháng, hay khung giờ peak, hãy trích xuất chính xác từ bảng tương ứng."
         )
 
         prompt = f"""
-=== DỮ LIỆU THỰC TẾ MYSQL ===
+=== BÁO CÁO DỮ LIỆU THỰC TẾ TRANG ADMIN ===
 {database_context}
 
-=== LỊCH SỬ GẦN ĐÂY ===
+=== LỊCH SỬ TRAO ĐỔI GẦN ĐÂY ===
 {history_text}
 
-=== CÂU HỎI HIỆN TẠI ===
+=== CÂU HỎI CỦA NGUỜI DÙNG ===
 {user_question}
 """
 
@@ -309,7 +312,8 @@ def ask_groq(user_question):
                 {"role": "user", "content": prompt}
             ],
             model=selected_model,
-            max_tokens=800,  # Giới hạn token đầu ra tránh đụng trần Free Tier
+            max_tokens=1000,
+            temperature=0.1  # Giảm bớt sáng tạo để trả lời chính xác số liệu
         )
         return chat_completion.choices[0].message.content
     except Exception as e:
